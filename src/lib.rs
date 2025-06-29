@@ -16,6 +16,7 @@ extern crate alloc;
 pub mod allocator;
 pub mod exit;
 pub mod gdt;
+pub mod graphics;
 pub mod interrupts;
 pub mod memory;
 pub mod serial;

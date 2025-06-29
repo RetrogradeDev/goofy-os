@@ -10,8 +10,9 @@ extern crate alloc;
 
 use bootloader::{BootInfo, entry_point};
 use goofy_os::{
+    graphics::clear_screen,
     memory::BootInfoFrameAllocator,
-    println,
+    println, serial_println,
     task::{Task, executor::Executor},
 };
 
@@ -30,6 +31,9 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
     use goofy_os::{allocator, memory};
     use x86_64::VirtAddr;
 
+    clear_screen(goofy_os::graphics::Color::Black);
+
+    serial_println!("Booting goofy OS...");
     println!("Hello World{}", "!");
 
     // Initialize the OS

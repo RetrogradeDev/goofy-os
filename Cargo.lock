@@ -34,6 +34,15 @@ checksum = "974e79cf1b0b737839f01330fb5393095daf1124d52693696494e32523ae9ef5"
 
 [[package]]
 name = "conquer-once"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7c6d3a9775a69f6d1fe2cc888999b67ed30257d3da4d2af91984e722f2ec918a"
+dependencies = [
+ "conquer-util",
+]
+
+[[package]]
+name = "conquer-once"
 version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5d008a441c0f269f36ca13712528069a86a3e60dffee1d98b976eb3b0b2160b4"
@@ -61,6 +70,12 @@ name = "crossbeam-utils"
 version = "0.8.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d0a5c400df2834b80a4c3327b3aad3a4c4cd4de0629063962b03235697506a28"
+
+[[package]]
+name = "font8x8"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "875488b8711a968268c7cf5d139578713097ca4635a76044e8fe8eedf831d07e"
 
 [[package]]
 name = "futures-core"
@@ -91,7 +106,7 @@ name = "goofy-os"
 version = "0.1.0"
 dependencies = [
  "bootloader",
- "conquer-once",
+ "conquer-once 0.4.0",
  "crossbeam-queue",
  "futures-util",
  "lazy_static",
@@ -100,8 +115,9 @@ dependencies = [
  "pic8259",
  "spin 0.10.0",
  "uart_16550",
+ "vga",
  "volatile 0.3.0",
- "x86_64",
+ "x86_64 0.15.2",
 ]
 
 [[package]]
@@ -133,6 +149,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "num-traits"
+version = "0.2.19"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "071dfc062690e90b734c0b2273ce72ad0ffa95f0c74596bc250dcfd960262841"
+dependencies = [
+ "autocfg",
+]
+
+[[package]]
 name = "pc-keyboard"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -144,7 +169,7 @@ version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "62d9a86c292b165f757e47e7fd66855def189b2564609bc4203727b27c33db22"
 dependencies = [
- "x86_64",
+ "x86_64 0.15.2",
 ]
 
 [[package]]
@@ -216,6 +241,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "vga"
+version = "0.2.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a5dd163a9cf938e0406e1ee29e3b71ac7d8f5ffe6c1321fe74797ebef1299bc6"
+dependencies = [
+ "bitflags 1.3.2",
+ "conquer-once 0.3.2",
+ "font8x8",
+ "num-traits",
+ "spinning_top",
+ "x86_64 0.14.13",
+]
+
+[[package]]
 name = "volatile"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -236,6 +275,18 @@ dependencies = [
  "bit_field",
  "bitflags 1.3.2",
  "raw-cpuid",
+]
+
+[[package]]
+name = "x86_64"
+version = "0.14.13"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c101112411baafbb4bf8d33e4c4a80ab5b02d74d2612331c61e8192fc9710491"
+dependencies = [
+ "bit_field",
+ "bitflags 2.9.1",
+ "rustversion",
+ "volatile 0.4.6",
 ]
 
 [[package]]
