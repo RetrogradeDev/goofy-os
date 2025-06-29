@@ -150,13 +150,13 @@ mod tests {
         use core::fmt::Write;
         use x86_64::instructions::interrupts;
 
-        let s = "Some test string that fits on a single line";
+        let s = "Some test string that fits on 1 line";
         interrupts::without_interrupts(|| {
             let mut writer = WRITER.lock();
             writeln!(writer, "\n{}", s).expect("writeln failed");
             for (i, c) in s.chars().enumerate() {
                 let screen_char = writer.chars[SCREEN_HEIGHT - 2][i];
-                assert_eq!(screen_char.char, c);
+                assert_eq!(screen_char.char, c,);
             }
         });
     }
