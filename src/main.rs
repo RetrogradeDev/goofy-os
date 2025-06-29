@@ -5,7 +5,8 @@
 #![reexport_test_harness_main = "test_main"]
 
 use core::panic::PanicInfo;
-use goofy_os::println;
+
+use goofy_os::{hlt_loop, println};
 
 #[unsafe(no_mangle)]
 pub extern "C" fn _start() -> ! {
@@ -19,15 +20,14 @@ pub extern "C" fn _start() -> ! {
 
     println!("It did not crash!");
 
-    loop {}
+    hlt_loop();
 }
 
-/// This function is called on panic.
 #[cfg(not(test))]
 #[panic_handler]
 fn panic(info: &PanicInfo) -> ! {
-    println!("{}", info);
-    loop {}
+    println!("Panic occurred: {}", info);
+    goofy_os::hlt_loop();
 }
 
 #[cfg(test)]

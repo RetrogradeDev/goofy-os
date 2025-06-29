@@ -9,6 +9,8 @@ spin = "0.10.0"
 volatile = "0.3.0"
 x86_64 = "0.15.2"
 uart_16550 = "0.3.2"
+pic8259 = "0.11.0"
+pc-keyboard = "0.8.0"
 
 [dependencies.lazy_static]
 version = "1.5"
