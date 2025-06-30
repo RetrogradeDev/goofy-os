@@ -2,54 +2,20 @@ use bootloader_api::{
     BootInfo,
     info::{FrameBufferInfo, PixelFormat},
 };
+
 use conquer_once::spin::OnceCell;
-use core::{fmt, ptr};
+use core::ptr;
+use spinning_top::Spinlock;
+
 use font_constants::BACKUP_CHAR;
 use noto_sans_mono_bitmap::{
     FontWeight, RasterHeight, RasterizedChar, get_raster, get_raster_width,
 };
-use spinning_top::Spinlock;
 
 pub static FRAMEBUFFER: OnceCell<Spinlock<FrameBufferWriter>> = OnceCell::uninit();
 
-/// Prints to framebuffer
-#[macro_export]
-macro_rules! print {
-    ($($arg:tt)*) => {
-        $crate::framebuffer::_print(format_args!($($arg)*))
-    };
-}
-
-/// Prints to framebuffer, appending a newline.
-#[macro_export]
-macro_rules! println {
-    () => ($crate::serial_print!("\n"));
-    ($fmt:expr) => ($crate::print!(concat!($fmt, "\n")));
-    ($fmt:expr, $($arg:tt)*) => ($crate::print!(
-        concat!($fmt, "\n"), $($arg)*));
-}
-
-#[doc(hidden)]
-pub fn _print(args: fmt::Arguments) {
-    use fmt::Write;
-    use x86_64::instructions::interrupts;
-    interrupts::without_interrupts(|| {
-        if let Some(fb) = FRAMEBUFFER.get() {
-            fb.lock().write_fmt(args).unwrap()
-        }
-    });
-}
-
-/// Additional vertical space between lines
-const LINE_SPACING: usize = 2;
-/// Additional horizontal space between characters.
-const LETTER_SPACING: usize = 0;
-
-/// Padding from the border. Prevent that font is too close to border.
-const BORDER_PADDING: usize = 1;
-
 /// Constants for the usage of the [`noto_sans_mono_bitmap`] crate.
-mod font_constants {
+pub mod font_constants {
     use super::*;
 
     /// Height of each char raster. The font size is ~0.84% of this. Thus, this is the line height that
@@ -107,85 +73,49 @@ impl Color {
 pub struct FrameBufferWriter {
     framebuffer: &'static mut [u8],
     info: FrameBufferInfo,
-    x_pos: usize,
-    y_pos: usize,
 }
 
 impl FrameBufferWriter {
     /// Creates a new logger that uses the given framebuffer.
     pub fn new(framebuffer: &'static mut [u8], info: FrameBufferInfo) -> Self {
-        let mut logger = Self {
-            framebuffer,
-            info,
-            x_pos: 0,
-            y_pos: 0,
-        };
+        let mut logger = Self { framebuffer, info };
         logger.clear();
         logger
     }
 
-    fn newline(&mut self) {
-        self.y_pos += font_constants::CHAR_RASTER_HEIGHT.val() + LINE_SPACING;
-        self.carriage_return()
-    }
-
-    fn carriage_return(&mut self) {
-        self.x_pos = BORDER_PADDING;
-    }
-
-    /// Erases all text on the screen. Resets `self.x_pos` and `self.y_pos`.
+    /// Erases all everything on the screen
     pub fn clear(&mut self) {
-        self.x_pos = BORDER_PADDING;
-        self.y_pos = BORDER_PADDING;
         self.framebuffer.fill(0);
     }
 
-    fn width(&self) -> usize {
+    pub fn width(&self) -> usize {
         self.info.width
     }
 
-    fn height(&self) -> usize {
+    pub fn height(&self) -> usize {
         self.info.height
     }
 
     pub fn size(&self) -> (usize, usize) {
         (self.info.width, self.info.height)
     }
-
-    /// Writes a single char to the framebuffer. Takes care of special control characters, such as
-    /// newlines and carriage returns.
-    fn write_char(&mut self, c: char) {
-        match c {
-            '\n' => self.newline(),
-            '\r' => self.carriage_return(),
-            c => {
-                let new_xpos = self.x_pos + font_constants::CHAR_RASTER_WIDTH;
-                if new_xpos >= self.width() {
-                    self.newline();
-                }
-                let new_ypos =
-                    self.y_pos + font_constants::CHAR_RASTER_HEIGHT.val() + BORDER_PADDING;
-                if new_ypos >= self.height() {
-                    self.clear();
-                }
-                self.write_rendered_char(get_char_raster(c));
-            }
-        }
+    pub fn write_char(&mut self, x: usize, y: usize, c: char) {
+        let new_xpos = x + font_constants::CHAR_RASTER_WIDTH;
+        let new_ypos = y + font_constants::CHAR_RASTER_HEIGHT.val();
+        self.write_rendered_char(new_xpos, new_ypos, get_char_raster(c));
     }
 
-    /// Prints a rendered char into the framebuffer.
-    /// Updates `self.x_pos`.
-    fn write_rendered_char(&mut self, rendered_char: RasterizedChar) {
-        for (y, row) in rendered_char.raster().iter().enumerate() {
-            for (x, byte) in row.iter().enumerate() {
+    fn write_rendered_char(&mut self, x: usize, y: usize, rendered_char: RasterizedChar) -> usize {
+        for (y_char, row) in rendered_char.raster().iter().enumerate() {
+            for (x_char, byte) in row.iter().enumerate() {
                 self.write_pixel(
-                    self.x_pos + x,
-                    self.y_pos + y,
+                    x + x_char,
+                    y + y_char,
                     Color::new(*byte, *byte, *byte / 2), // Yellow-ish color
                 );
             }
         }
-        self.x_pos += rendered_char.width() + LETTER_SPACING;
+        rendered_char.width()
     }
 
     pub fn write_pixel(&mut self, x: usize, y: usize, color: Color) {
@@ -207,18 +137,6 @@ impl FrameBufferWriter {
         self.framebuffer[byte_offset..(byte_offset + bytes_per_pixel)]
             .copy_from_slice(&color[..bytes_per_pixel]);
         let _ = unsafe { ptr::read_volatile(&self.framebuffer[byte_offset]) };
-    }
-}
-
-unsafe impl Send for FrameBufferWriter {}
-unsafe impl Sync for FrameBufferWriter {}
-
-impl fmt::Write for FrameBufferWriter {
-    fn write_str(&mut self, s: &str) -> fmt::Result {
-        for c in s.chars() {
-            self.write_char(c);
-        }
-        Ok(())
     }
 }
 

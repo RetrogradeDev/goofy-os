@@ -70,10 +70,10 @@ extern "x86-interrupt" fn double_fault_handler(
     stack_frame: InterruptStackFrame,
     _error_code: u64,
 ) -> ! {
-    println!("EXCEPTION: DOUBLE FAULT\n{:#?}", stack_frame);
-
     serial_println!("Double fault occurred, halting the system.");
     serial_println!("Stack frame: {:#?}", stack_frame);
+
+    println!("EXCEPTION: DOUBLE FAULT\n{:#?}", stack_frame);
 
     loop {}
 }
