@@ -3,8 +3,8 @@
 #![feature(abi_x86_interrupt)]
 
 use core::panic::PanicInfo;
-use goofy_os::exit::{QemuExitCode, exit_qemu};
-use goofy_os::{serial_print, serial_println};
+use kernel::exit::{QemuExitCode, exit_qemu};
+use kernel::{serial_print, serial_println};
 
 use lazy_static::lazy_static;
 use x86_64::structures::idt::InterruptDescriptorTable;
@@ -25,7 +25,7 @@ lazy_static! {
         unsafe {
             idt.double_fault
                 .set_handler_fn(test_double_fault_handler)
-                .set_stack_index(goofy_os::gdt::DOUBLE_FAULT_IST_INDEX);
+                .set_stack_index(kernel::gdt::DOUBLE_FAULT_IST_INDEX);
         }
 
         idt
@@ -40,7 +40,7 @@ pub fn init_test_idt() {
 pub extern "C" fn _start() -> ! {
     serial_print!("stack_overflow::stack_overflow...\t");
 
-    goofy_os::gdt::init();
+    kernel::gdt::init();
     init_test_idt();
 
     // trigger a stack overflow
@@ -57,5 +57,5 @@ fn stack_overflow() {
 
 #[panic_handler]
 fn panic(info: &PanicInfo) -> ! {
-    goofy_os::test_panic_handler(info)
+    kernel::test_panic_handler(info)
 }

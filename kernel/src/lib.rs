@@ -6,7 +6,7 @@
 #![reexport_test_harness_main = "test_main"]
 
 #[cfg(test)]
-use bootloader::{BootInfo, entry_point};
+use bootloader_api::{BootInfo, entry_point};
 
 use core::panic::PanicInfo;
 use exit::{QemuExitCode, exit_qemu};
@@ -15,19 +15,32 @@ extern crate alloc;
 
 pub mod allocator;
 pub mod exit;
+pub mod framebuffer;
 pub mod gdt;
 pub mod graphics;
 pub mod interrupts;
 pub mod memory;
 pub mod serial;
 pub mod task;
-pub mod vga_buffer;
+
+use bootloader_api::config::{BootloaderConfig, Mapping};
+
+pub static BOOTLOADER_CONFIG: BootloaderConfig = {
+    let mut config = BootloaderConfig::new_default();
+    config.mappings.physical_memory = Some(Mapping::Dynamic);
+    config
+};
 
 pub fn init() {
+    serial_println!("Initializing interrupts...");
     interrupts::init_idt();
+    serial_println!("Initializing GDT...");
     gdt::init();
+    serial_println!("Initializing PICs...");
     unsafe { interrupts::PICS.lock().initialize() };
+    serial_println!("Enabling interrupts...");
     x86_64::instructions::interrupts::enable();
+    serial_println!("Done!");
 }
 
 pub fn hlt_loop() -> ! {
@@ -67,11 +80,11 @@ pub fn test_panic_handler(info: &PanicInfo) -> ! {
 }
 
 #[cfg(test)]
-entry_point!(test_kernel_main);
+entry_point!(test_kernel_main, config = &BOOTLOADER_CONFIG);
 
 /// Entry point for `cargo test`
 #[cfg(test)]
-fn test_kernel_main(_boot_info: &'static BootInfo) -> ! {
+fn test_kernel_main(_boot_info: &'static mut BootInfo) -> ! {
     init();
     test_main();
     hlt_loop();

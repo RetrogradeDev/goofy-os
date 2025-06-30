@@ -1,68 +1,21 @@
-#![no_std]
-#![no_main]
-#![feature(custom_test_frameworks)]
-#![test_runner(goofy_os::test_runner)]
-#![reexport_test_harness_main = "test_main"]
+fn main() {
+    // read env variables that were set in build script
+    let uefi_path = env!("UEFI_PATH");
+    let bios_path = env!("BIOS_PATH");
 
-use core::panic::PanicInfo;
+    // choose whether to start the UEFI or BIOS image
+    let uefi = false; // change to true to use UEFI
 
-extern crate alloc;
-
-use bootloader::{BootInfo, entry_point};
-use goofy_os::{
-    graphics::clear_screen,
-    memory::BootInfoFrameAllocator,
-    println, serial_println,
-    task::{Task, executor::Executor},
-};
-
-async fn async_number() -> u32 {
-    42
-}
-
-async fn example_task() {
-    let number = async_number().await;
-    println!("async number: {}", number);
-}
-
-entry_point!(kernel_main);
-
-fn kernel_main(boot_info: &'static BootInfo) -> ! {
-    use goofy_os::{allocator, memory};
-    use x86_64::VirtAddr;
-
-    clear_screen(goofy_os::graphics::Color::Black);
-
-    serial_println!("Booting goofy OS...");
-    println!("Hello World{}", "!");
-
-    // Initialize the OS
-    goofy_os::init();
-
-    let phys_mem_offset = VirtAddr::new(boot_info.physical_memory_offset);
-    let mut mapper = unsafe { memory::init(phys_mem_offset) };
-    let mut frame_allocator = unsafe { BootInfoFrameAllocator::init(&boot_info.memory_map) };
-
-    allocator::init_heap(&mut mapper, &mut frame_allocator).expect("heap initialization failed");
-
-    #[cfg(test)]
-    test_main();
-
-    let mut executor = Executor::new();
-    executor.spawn(Task::new(example_task()));
-    executor.spawn(Task::new(goofy_os::task::keyboard::print_keypresses()));
-    executor.run();
-}
-
-#[cfg(not(test))]
-#[panic_handler]
-fn panic(info: &PanicInfo) -> ! {
-    println!("Panic occurred: {}", info);
-    goofy_os::hlt_loop();
-}
-
-#[cfg(test)]
-#[panic_handler]
-fn panic(info: &PanicInfo) -> ! {
-    goofy_os::test_panic_handler(info)
+    let mut cmd = std::process::Command::new("qemu-system-x86_64");
+    cmd.arg("-serial").arg("stdio");
+    if uefi {
+        cmd.arg("-bios").arg(ovmf_prebuilt::ovmf_pure_efi());
+        cmd.arg("-drive")
+            .arg(format!("format=raw,file={uefi_path}"));
+    } else {
+        cmd.arg("-drive")
+            .arg(format!("format=raw,file={bios_path}"));
+    }
+    let mut child = cmd.spawn().unwrap();
+    child.wait().unwrap();
 }

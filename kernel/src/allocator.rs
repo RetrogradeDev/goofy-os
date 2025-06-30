@@ -10,6 +10,8 @@ use x86_64::{
     },
 };
 
+use crate::serial_println;
+
 pub const HEAP_START: usize = 0x_4444_4444_0000;
 pub const HEAP_SIZE: usize = 100 * 1024; // 100 KiB
 
@@ -32,6 +34,12 @@ pub fn init_heap(
     mapper: &mut impl Mapper<Size4KiB>,
     frame_allocator: &mut impl FrameAllocator<Size4KiB>,
 ) -> Result<(), MapToError<Size4KiB>> {
+    serial_println!(
+        "Initializing heap at {:#x} with size {} bytes",
+        HEAP_START,
+        HEAP_SIZE
+    );
+
     let page_range = {
         let heap_start = VirtAddr::new(HEAP_START as u64);
         let heap_end = heap_start + HEAP_SIZE as u64 - 1u64;
@@ -39,6 +47,12 @@ pub fn init_heap(
         let heap_end_page = Page::containing_address(heap_end);
         Page::range_inclusive(heap_start_page, heap_end_page)
     };
+
+    serial_println!(
+        "Mapping pages for heap: {:#?} to {:#?}",
+        page_range.start,
+        page_range.end
+    );
 
     for page in page_range {
         let frame = frame_allocator
@@ -48,9 +62,17 @@ pub fn init_heap(
         unsafe { mapper.map_to(page, frame, flags, frame_allocator)?.flush() };
     }
 
+    serial_println!("Heap pages mapped successfully.");
+
     unsafe {
         ALLOCATOR.lock().init(HEAP_START as *mut u8, HEAP_SIZE);
     }
+
+    serial_println!(
+        "Heap initialized successfully at {:#x} with size {} bytes",
+        HEAP_START,
+        HEAP_SIZE
+    );
 
     Ok(())
 }

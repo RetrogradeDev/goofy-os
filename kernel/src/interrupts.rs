@@ -1,4 +1,4 @@
-use crate::{hlt_loop, print, println};
+use crate::{hlt_loop, print, println, serial_println};
 use lazy_static::lazy_static;
 use pic8259::ChainedPics;
 use spin;
@@ -60,6 +60,9 @@ extern "x86-interrupt" fn page_fault_handler(
     println!("Accessed Address: {:?}", Cr2::read());
     println!("Error Code: {:?}", error_code);
     println!("{:#?}", stack_frame);
+
+    serial_println!("Page fault occurred, halting the system.");
+
     hlt_loop();
 }
 
@@ -68,6 +71,10 @@ extern "x86-interrupt" fn double_fault_handler(
     _error_code: u64,
 ) -> ! {
     println!("EXCEPTION: DOUBLE FAULT\n{:#?}", stack_frame);
+
+    serial_println!("Double fault occurred, halting the system.");
+    serial_println!("Stack frame: {:#?}", stack_frame);
+
     loop {}
 }
 

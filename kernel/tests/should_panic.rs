@@ -1,11 +1,11 @@
 #![no_std]
 #![no_main]
 #![feature(custom_test_frameworks)]
-#![test_runner(goofy_os::test_runner)]
+#![test_runner(kernel::test_runner)]
 #![reexport_test_harness_main = "test_main"]
 
 use core::panic::PanicInfo;
-use goofy_os::{
+use kernel::{
     exit::{QemuExitCode, exit_qemu},
     serial_print, serial_println,
 };

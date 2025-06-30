@@ -1,0 +1,39 @@
+[package]
+name = "kernel"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+# bootloader = { version = "0.9", features = ["map_physical_memory"]}
+bootloader_api = "0.11"
+spin = "0.10.0"
+volatile = "0.3.0"
+x86_64 = "0.15.2"
+uart_16550 = "0.3.2"
+pic8259 = "0.11.0"
+pc-keyboard = "0.8.0"
+linked_list_allocator = "0.10.5"
+crossbeam-queue = { version = "0.3.12", default-features = false, features = ["alloc"] }
+lazy_static = { version = "1.5", features = ["spin_no_std"] }
+conquer-once = { version = "0.4.0", default-features = false }
+futures-util = { version = "0.3.31", default-features = false, features = ["alloc"] }
+spinning_top = "0.3.0"
+
+[dependencies.noto-sans-mono-bitmap]
+version = "0.3"
+default-features = false
+features = [
+    "regular",
+    "size_16",
+    "unicode-basic-latin",
+    # required for the fallback char '�'
+    "unicode-specials",
+]
+
+[[test]]
+name = "should_panic"
+harness = false
+
+[[test]]
+name = "stack_overflow"
+harness = false

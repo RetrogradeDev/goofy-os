@@ -1,39 +1,21 @@
 [package]
-name = "goofy-os"
+name = "goofy_os"         # or any other name
 version = "0.1.0"
 edition = "2024"
 
+[build-dependencies]
+bootloader = "0.11"
+kernel = { path = "kernel", artifact = "bin", target = "x86_64-unknown-none" }
+
 [dependencies]
-bootloader = { version = "0.9", features = ["map_physical_memory"]}
-spin = "0.10.0"
-volatile = "0.3.0"
-x86_64 = "0.15.2"
-uart_16550 = "0.3.2"
-pic8259 = "0.11.0"
-pc-keyboard = "0.8.0"
-linked_list_allocator = "0.10.5"
-crossbeam-queue = { version = "0.3.12", default-features = false, features = ["alloc"] }
-lazy_static = { version = "1.5", features = ["spin_no_std"] }
-conquer-once = { version = "0.4.0", default-features = false }
-futures-util = { version = "0.3.31", default-features = false, features = ["alloc"] }
-vga = "0.2.9"
+# used for UEFI booting in QEMU
+ovmf-prebuilt = "0.1.0-alpha.1"
+
+[workspace]
+members = ["kernel"]
 
 [profile.dev]
 # panic = "abort"
 
 [profile.release]
 panic = "abort"
-
-[package.metadata.bootimage]
-run-args = ["-serial", "stdio"]
-test-args = ["-device", "isa-debug-exit,iobase=0xf4,iosize=0x04", "-serial", "stdio", "-display", "none"]
-test-success-exit-code = 33         # (0x10 << 1) | 1
-test-timeout = 60          # (in seconds)
-
-[[test]]
-name = "should_panic"
-harness = false
-
-[[test]]
-name = "stack_overflow"
-harness = false
