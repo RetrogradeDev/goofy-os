@@ -15,7 +15,6 @@ use kernel::{
     graphics::{
         draw_circle, draw_circle_outline, draw_line, draw_rect, draw_rect_outline, set_pixel,
     },
-    hlt_loop,
     memory::BootInfoFrameAllocator,
     println,
     serial_println,
@@ -46,9 +45,6 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     use x86_64::VirtAddr;
 
     serial_println!("Booting goofy OS...");
-
-    // clear_screen(kernel::framebuffer::Color::Black);
-
     serial_println!("Bootloader information: {:#?}", boot_info);
 
     FRAMEBUFFER.init_once(|| {
@@ -83,13 +79,11 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     draw_circle((600, 600), 50, kernel::framebuffer::Color::new(255, 0, 255));
     draw_circle_outline((700, 600), 75, kernel::framebuffer::Color::new(0, 255, 255));
 
-    // hlt_loop();
-
     // Initialize the OS
     kernel::init();
 
     serial_println!("Kernel initialized, setting up memory...");
-    // println!("Kernel initialized successfully!");
+    println!("Kernel initialized successfully!");
 
     let phys_mem_offset = VirtAddr::new(boot_info.physical_memory_offset.into_option().unwrap());
 
@@ -109,14 +103,14 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
 
     println!("Hello World{}", "!");
 
-    // // Some tests for the heap allocator
-    // let heap_value = alloc::boxed::Box::new(41);
-    // println!("heap_value at {:p}", heap_value);
+    // Some tests for the heap allocator
+    let heap_value = alloc::boxed::Box::new(41);
+    println!("heap_value at {:p}", heap_value);
 
-    // let heap_vector = alloc::vec![1, 2, 3, 4, 5];
-    // println!("heap_vector at {:p}", heap_vector.as_ptr());
-    // let heap_string = alloc::string::String::from("Hello from the heap!");
-    // println!("heap_string at {:p}", heap_string.as_ptr());
+    let heap_vector = alloc::vec![1, 2, 3, 4, 5];
+    println!("heap_vector at {:p}", heap_vector.as_ptr());
+    let heap_string = alloc::string::String::from("Hello from the heap!");
+    println!("heap_string at {:p}", heap_string.as_ptr());
 
     #[cfg(test)]
     test_main();

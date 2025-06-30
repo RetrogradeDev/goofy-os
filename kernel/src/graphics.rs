@@ -1,4 +1,4 @@
-use crate::framebuffer::{Color, FRAMEBUFFER, font_constants};
+use crate::framebuffer::{Color, FRAMEBUFFER};
 
 pub fn set_pixel(x: usize, y: usize, color: Color) {
     FRAMEBUFFER
@@ -108,25 +108,6 @@ pub fn draw_circle_outline(center: (usize, usize), radius: usize, color: Color) 
                     fb.write_pixel(cx + x, cy - y, color);
                     fb.write_pixel(cx - x, cy - y, color);
                 }
-            }
-        }
-    });
-}
-
-pub fn draw_text(x: usize, y: usize, text: &str) {
-    FRAMEBUFFER.get().map(|fb| {
-        let mut fb = fb.lock();
-        let mut x_pos = x;
-        let mut y_pos = y;
-
-        for c in text.chars() {
-            if c == '\n' {
-                x_pos = x;
-                y_pos += font_constants::CHAR_RASTER_HEIGHT.val();
-            } else if c == '\r' {
-                x_pos = x;
-            } else {
-                fb.write_char(x_pos, y_pos, c);
             }
         }
     });
