@@ -8,10 +8,8 @@ pub const DOUBLE_FAULT_IST_INDEX: u16 = 0;
 pub const PAGE_FAULT_IST_INDEX: u16 = 1;
 pub const GENERAL_PROTECTION_FAULT_IST_INDEX: u16 = 2;
 
-// some code from https://github.com/vinc/moros/blob/trunk/src/sys/gdt.rs
-
 lazy_static! {
-    static ref TSS: TaskStateSegment = {
+    pub static ref TSS: TaskStateSegment = {
         let mut tss = TaskStateSegment::new();
         tss.privilege_stack_table[0] = {
             static mut STACK: [u8; STACK_SIZE] = [0; STACK_SIZE];
@@ -33,7 +31,7 @@ lazy_static! {
         };
         tss
     };
-    static ref GDT: (GlobalDescriptorTable, Selectors) = {
+    pub static ref GDT: (GlobalDescriptorTable, Selectors) = {
         let mut gdt = GlobalDescriptorTable::new();
         let code = gdt.append(Descriptor::kernel_code_segment());
         let tss = gdt.append(Descriptor::tss_segment(&TSS));
@@ -54,7 +52,7 @@ lazy_static! {
     };
 }
 
-struct Selectors {
+pub struct Selectors {
     code: SegmentSelector,
     tss: SegmentSelector,
     data: SegmentSelector,

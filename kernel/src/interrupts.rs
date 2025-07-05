@@ -1,4 +1,5 @@
 use crate::{hlt_loop, print, println, serial_println};
+use core::arch::{asm, naked_asm};
 use lazy_static::lazy_static;
 use pic8259::ChainedPics;
 use spin;
@@ -6,6 +7,7 @@ use x86_64::structures::idt::{InterruptDescriptorTable, InterruptStackFrame, Pag
 
 pub const PIC_1_OFFSET: u8 = 32;
 pub const PIC_2_OFFSET: u8 = PIC_1_OFFSET + 8;
+pub const SYSCALL_INTERRUPT: u8 = 0x80;
 
 pub static PICS: spin::Mutex<ChainedPics> =
     spin::Mutex::new(unsafe { ChainedPics::new(PIC_1_OFFSET, PIC_2_OFFSET) });
@@ -38,6 +40,15 @@ lazy_static! {
         idt[InterruptIndex::Timer.as_u8()].set_handler_fn(timer_handler);
         idt[InterruptIndex::Keyboard.as_u8()].set_handler_fn(keyboard_interrupt_handler);
 
+        // Set up syscall handler with DPL 3 to allow user mode access
+        // Use a custom gate instead of the x86-interrupt attribute
+        unsafe {
+            let syscall_entry = syscall_handler_asm as *const () as u64;
+            idt[SYSCALL_INTERRUPT]
+                .set_handler_addr(x86_64::VirtAddr::new(syscall_entry))
+                .set_privilege_level(x86_64::PrivilegeLevel::Ring3);
+        }
+
         idt
     };
 }
@@ -61,7 +72,9 @@ extern "x86-interrupt" fn page_fault_handler(
     println!("Error Code: {:?}", error_code);
     println!("{:#?}", stack_frame);
 
-    serial_println!("Page fault occurred, halting the system.");
+    serial_println!("Page Fault occurred at address: {:?}", Cr2::read());
+    serial_println!("Error Code: {:?}", error_code);
+    serial_println!("{:#?}", stack_frame);
 
     hlt_loop();
 }
@@ -75,7 +88,7 @@ extern "x86-interrupt" fn double_fault_handler(
 
     println!("EXCEPTION: DOUBLE FAULT\n{:#?}", stack_frame);
 
-    loop {}
+    hlt_loop();
 }
 
 extern "x86-interrupt" fn timer_handler(_stack_frame: InterruptStackFrame) {
@@ -99,6 +112,105 @@ extern "x86-interrupt" fn keyboard_interrupt_handler(_stack_frame: InterruptStac
         PICS.lock()
             .notify_end_of_interrupt(InterruptIndex::Keyboard.as_u8());
     }
+}
+
+// Debug version to figure out correct register values
+#[unsafe(naked)]
+unsafe extern "C" fn syscall_handler_asm() {
+    naked_asm!(
+        // Save registers
+        "push rax",
+        "push rbx",
+        "push rcx",
+        "push rdx",
+        "push rsi",
+        "push rdi",
+        "push rbp",
+
+        // Pass register values as arguments to debug function
+        // Move original register values (now on stack) to argument registers
+        "mov rdi, [rsp + 48]",  // original rax (syscall number)
+        "mov rsi, [rsp + 8]",   // original rdi (arg1)
+        "mov rdx, [rsp + 16]",  // original rsi (arg2)
+        "mov rcx, [rsp + 24]",  // original rdx (arg3)
+
+        "call {}",
+
+        // Store return value in original rax position
+        "mov [rsp + 48], rax",
+
+        // Restore registers
+        "pop rbp",
+        "pop rdi",
+        "pop rsi",
+        "pop rdx",
+        "pop rcx",
+        "pop rbx",
+        "pop rax",
+
+        // Advance RIP past int 0x80 (2 bytes)
+        "add qword ptr [rsp], 2",
+
+        "iretq",
+
+        sym syscall_handler_rust_debug
+    );
+}
+
+// Debug version to figure out correct register values
+extern "C" fn syscall_handler_rust_debug(rax: u64, rdi: u64, rsi: u64, rdx: u64) -> u64 {
+    serial_println!("Syscall handler (Rust) called");
+    serial_println!(
+        "Syscall: rax={}, rdi={}, rsi=0x{:x}, rdx={}",
+        rax,
+        rdi,
+        rsi,
+        rdx
+    );
+
+    let result = handle_syscall(rax, rdi, rsi, rdx);
+    serial_println!("Syscall completed, result: {}", result);
+    serial_println!("About to return from syscall...");
+
+    result
+}
+
+fn handle_syscall(number: u64, arg1: u64, arg2: u64, arg3: u64) -> u64 {
+    match number {
+        1 => sys_write(arg1, arg2, arg3),
+        60 => sys_exit(arg1),
+        _ => {
+            serial_println!("Unknown syscall: {}", number);
+            u64::MAX // Error
+        }
+    }
+}
+
+fn sys_write(fd: u64, buf_ptr: u64, count: u64) -> u64 {
+    serial_println!(
+        "sys_write called: fd={}, buf_ptr=0x{:x}, count={}",
+        fd,
+        buf_ptr,
+        count
+    );
+
+    if fd == 1 {
+        // stdout
+        // For now, just print that we got a write syscall
+        serial_println!("Write to stdout: {} bytes", count);
+        count // Return number of bytes "written"
+    } else {
+        serial_println!("Write to unsupported fd: {}", fd);
+        0
+    }
+}
+
+fn sys_exit(exit_code: u64) -> u64 {
+    serial_println!("sys_exit called with code: {}", exit_code);
+    serial_println!("Process exiting...");
+
+    // TODO: Clean up the process stack
+    crate::hlt_loop();
 }
 
 #[cfg(test)]

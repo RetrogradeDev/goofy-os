@@ -1,10 +1,15 @@
 use x86_64::{
     PhysAddr, VirtAddr,
-    structures::paging::{FrameAllocator, OffsetPageTable, PageTable, PhysFrame, Size4KiB},
+    structures::paging::{
+        FrameAllocator, Mapper, OffsetPageTable, PageTable, PageTableFlags, PhysFrame, Size4KiB,
+        mapper::MapToError,
+    },
 };
 
 // use bootloader::bootinfo::{MemoryMap, MemoryRegionType};
 use bootloader_api::info::{MemoryRegionKind, MemoryRegions};
+
+use crate::serial_println;
 
 /// A FrameAllocator that returns usable frames from the bootloader's memory map.
 pub struct BootInfoFrameAllocator {
@@ -84,5 +89,90 @@ unsafe impl FrameAllocator<Size4KiB> for BootInfoFrameAllocator {
         let frame = self.usable_frames().nth(self.next);
         self.next += 1;
         frame
+    }
+}
+
+pub struct ProcessAddressSpace {
+    pub page_table_frame: PhysFrame<Size4KiB>,
+    physical_memory_offset: VirtAddr,
+}
+
+impl ProcessAddressSpace {
+    pub fn new(
+        frame_allocator: &mut impl FrameAllocator<Size4KiB>,
+        physical_memory_offset: VirtAddr,
+    ) -> Result<Self, MapToError<Size4KiB>> {
+        // Create a new page table for the process
+        let page_table_frame = frame_allocator
+            .allocate_frame()
+            .ok_or(MapToError::FrameAllocationFailed)?;
+
+        // Initialize the page table with kernel mappings
+        // but separate user space
+        let page_table_virt = physical_memory_offset + page_table_frame.start_address().as_u64();
+        let page_table_ptr: *mut PageTable = page_table_virt.as_mut_ptr();
+
+        // Zero out the new page table
+        unsafe {
+            let page_table = &mut *page_table_ptr;
+            page_table.zero();
+
+            // Copy ALL kernel mappings from current page table
+            // This ensures the kernel remains accessible after page table switch
+            let current_table = active_level_4_table(physical_memory_offset);
+
+            // Copy all entries - we'll overwrite user space later
+            for i in 0..512 {
+                page_table[i] = current_table[i].clone();
+            }
+        }
+
+        Ok(ProcessAddressSpace {
+            page_table_frame,
+            physical_memory_offset,
+        })
+    }
+
+    pub fn map_user_memory(
+        &mut self,
+        virtual_addr: VirtAddr,
+        physical_addr: PhysAddr,
+        _size: u64, // Currently unused - for future multi-page mappings
+        flags: PageTableFlags,
+        frame_allocator: &mut impl FrameAllocator<Size4KiB>,
+    ) -> Result<(), MapToError<Size4KiB>> {
+        use x86_64::structures::paging::Page;
+
+        // Get access to the process's page table
+        let page_table_virt =
+            self.physical_memory_offset + self.page_table_frame.start_address().as_u64();
+        let page_table_ptr: *mut PageTable = page_table_virt.as_mut_ptr();
+
+        unsafe {
+            let page_table_ref = &mut *page_table_ptr;
+            let mut mapper = OffsetPageTable::new(page_table_ref, self.physical_memory_offset);
+
+            let frame = PhysFrame::containing_address(physical_addr);
+            let page = Page::containing_address(virtual_addr);
+
+            serial_println!(
+                "Mapping virtual address {:?} to physical address {:?}, page: {:?}, frame: {:?}",
+                virtual_addr,
+                physical_addr,
+                page,
+                frame
+            );
+
+            // Map memory with user accessible flags
+            mapper
+                .map_to(
+                    page,
+                    frame,
+                    flags | PageTableFlags::USER_ACCESSIBLE,
+                    frame_allocator,
+                )?
+                .flush();
+        }
+        Ok(())
     }
 }

@@ -14,12 +14,14 @@ use exit::{QemuExitCode, exit_qemu};
 extern crate alloc;
 
 pub mod allocator;
+pub mod example_program;
 pub mod exit;
 pub mod framebuffer;
 pub mod gdt;
 pub mod graphics;
 pub mod interrupts;
 pub mod memory;
+pub mod process;
 pub mod serial;
 pub mod task;
 

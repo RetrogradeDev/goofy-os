@@ -11,6 +11,7 @@ extern crate alloc;
 use bootloader_api::{BootInfo, entry_point};
 use kernel::{
     // framebuffer::clear_screen,
+    example_program::run_example_program,
     framebuffer::{FRAMEBUFFER, FrameBufferWriter},
     graphics::{
         draw_circle, draw_circle_outline, draw_line, draw_rect, draw_rect_outline, set_pixel,
@@ -102,6 +103,8 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     serial_println!("Heap initialized successfully!");
 
     println!("Hello World{}", "!");
+
+    run_example_program(&mut frame_allocator, phys_mem_offset);
 
     // Some tests for the heap allocator
     let heap_value = alloc::boxed::Box::new(41);
