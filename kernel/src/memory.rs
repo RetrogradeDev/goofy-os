@@ -87,6 +87,16 @@ unsafe impl FrameAllocator<Size4KiB> for EmptyFrameAllocator {
 unsafe impl FrameAllocator<Size4KiB> for BootInfoFrameAllocator {
     fn allocate_frame(&mut self) -> Option<PhysFrame> {
         let frame = self.usable_frames().nth(self.next);
+        if frame.is_none() {
+            serial_println!("Frame allocation failed at index {}", self.next);
+            // Count total available frames for debugging
+            let total_frames = self.usable_frames().count();
+            serial_println!(
+                "Total usable frames: {}, requested index: {}",
+                total_frames,
+                self.next
+            );
+        }
         self.next += 1;
         frame
     }
@@ -117,14 +127,22 @@ impl ProcessAddressSpace {
             let page_table = &mut *page_table_ptr;
             page_table.zero();
 
-            // Copy ALL kernel mappings from current page table
-            // This ensures the kernel remains accessible after page table switch
+            // Copy kernel mappings from current page table
+            // We need to copy ALL kernel mappings to ensure kernel remains accessible
             let current_table = active_level_4_table(physical_memory_offset);
 
-            // Copy all entries - we'll overwrite user space later
+            // Copy ALL non-empty entries to preserve all kernel mappings
             for i in 0..512 {
-                page_table[i] = current_table[i].clone();
+                if !current_table[i].is_unused() {
+                    page_table[i] = current_table[i].clone();
+                }
             }
+
+            // Recursively map the L4 page table to itself for easy access
+            page_table[510].set_addr(
+                page_table_frame.start_address(),
+                PageTableFlags::PRESENT | PageTableFlags::WRITABLE,
+            );
         }
 
         Ok(ProcessAddressSpace {
@@ -164,14 +182,17 @@ impl ProcessAddressSpace {
             );
 
             // Map memory with user accessible flags
+            let final_flags = flags | PageTableFlags::USER_ACCESSIBLE;
+            serial_println!("Final page table flags being set: {:?}", final_flags);
+
             mapper
-                .map_to(
-                    page,
-                    frame,
-                    flags | PageTableFlags::USER_ACCESSIBLE,
-                    frame_allocator,
-                )?
+                .map_to(page, frame, final_flags, frame_allocator)?
                 .flush();
+
+            // Check what the page table entry actually contains after mapping
+            if let Ok(frame) = mapper.translate_page(page) {
+                serial_println!("Page table entry after mapping: frame={:?}", frame);
+            }
         }
         Ok(())
     }

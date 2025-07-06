@@ -9,6 +9,7 @@ bootloader_api = "0.11"
 spin = "0.10.0"
 volatile = "0.3.0"
 x86_64 = "0.15.2"
+goblin = { version = "0.10.0", default-features = false, features = ["elf32", "elf64", "endian_fd"] }
 uart_16550 = "0.3.2"
 pic8259 = "0.11.0"
 pc-keyboard = "0.8.0"

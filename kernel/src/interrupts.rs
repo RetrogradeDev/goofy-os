@@ -1,5 +1,5 @@
 use crate::{hlt_loop, print, println, serial_println};
-use core::arch::{asm, naked_asm};
+use core::arch::naked_asm;
 use lazy_static::lazy_static;
 use pic8259::ChainedPics;
 use spin;
@@ -49,12 +49,30 @@ lazy_static! {
                 .set_privilege_level(x86_64::PrivilegeLevel::Ring3);
         }
 
+        idt.general_protection_fault.set_handler_fn(general_protection_fault_handler);
+        // idt.security_exception
+        //     .set_handler_fn(general_protection_fault_handler);
+
         idt
     };
 }
 
 pub fn init_idt() {
     IDT.load();
+}
+
+extern "x86-interrupt" fn general_protection_fault_handler(
+    stack_frame: InterruptStackFrame,
+    error_code: u64,
+) {
+    println!("EXCEPTION: GENERAL PROTECTION FAULT\n{:#?}", stack_frame);
+    serial_println!(
+        "General Protection Fault occurred. Error code: {}",
+        error_code
+    );
+    serial_println!("{:#?}", stack_frame);
+
+    hlt_loop();
 }
 
 extern "x86-interrupt" fn breakpoint_handler(stack_frame: InterruptStackFrame) {
@@ -148,8 +166,10 @@ unsafe extern "C" fn syscall_handler_asm() {
         "pop rbx",
         "pop rax",
 
-        // Advance RIP past int 0x80 (2 bytes)
-        "add qword ptr [rsp], 2",
+        // Pop the user RIP, increment it, and push it back.
+        "pop r11",
+        "add r11, 2",
+        "push r11",
 
         "iretq",
 

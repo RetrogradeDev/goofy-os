@@ -16,6 +16,11 @@ fn main() {
         cmd.arg("-drive")
             .arg(format!("format=raw,file={bios_path}"));
     }
+
+    // Helps us when we reboot bc of a triple fault
+    // cmd.arg("-d").arg("int");
+    // cmd.arg("-no-reboot");
+
     let mut child = cmd.spawn().unwrap();
     child.wait().unwrap();
 }
