@@ -117,7 +117,8 @@ impl ProcessManager {
                 0x1000, // 4KB stack
                 PageTableFlags::PRESENT
                     | PageTableFlags::WRITABLE
-                    | PageTableFlags::USER_ACCESSIBLE,
+                    | PageTableFlags::USER_ACCESSIBLE
+                    | PageTableFlags::NO_EXECUTE,
                 frame_allocator,
             )
             .map_err(|e| {
@@ -151,35 +152,24 @@ impl ProcessManager {
 
             let segment_data = &binary[file_start..file_end];
 
-            // Allocate frame for this segment
-            serial_println!("Allocating frame for segment {}", i);
-            let segment_frame = frame_allocator.allocate_frame().ok_or_else(|| {
-                serial_println!("Failed to allocate frame for segment {}", i);
-                ProcessError::OutOfMemory
-            })?;
-
-            // Map segment to memory
-            let segment_virtual_addr = VirtAddr::new(mem_start);
-            let mut segment_flags = PageTableFlags::PRESENT | PageTableFlags::USER_ACCESSIBLE;
+            // Calculate how many pages we need for this segment
+            let segment_virtual_addr = VirtAddr::new(mem_start & !0xfff); // Page-align the start address
+            let segment_end_addr = mem_start + ph.p_memsz;
+            let aligned_size = (segment_end_addr + 4095) & !0xfff - (mem_start & !0xfff); // Calculate aligned size
+            let pages_needed = aligned_size / 4096;
+            
+            serial_println!("Segment {} needs {} pages ({} bytes)", i, pages_needed, aligned_size);
+            serial_println!("Original segment virtual address: 0x{:x}, aligned: {:?}", mem_start, segment_virtual_addr);
 
             // Set appropriate flags based on ELF segment permissions
+            let mut segment_flags = PageTableFlags::PRESENT | PageTableFlags::USER_ACCESSIBLE;
             if ph.p_flags & goblin::elf::program_header::PF_W != 0 {
                 segment_flags |= PageTableFlags::WRITABLE;
             }
-
-            // For executable segments, allow execution by NOT setting NO_EXECUTE
-            if ph.p_flags & goblin::elf::program_header::PF_X != 0 {
-                // For now, keep both writable and executable for PIE executables
-                // which may need to write to their own code segments during loading
-                // TODO: Implement proper W^X after dynamic loading is complete
-            } else {
-                // For non-executable segments, set the NX bit for security
+            if (ph.p_flags & goblin::elf::program_header::PF_X) == 0 {
                 segment_flags |= PageTableFlags::NO_EXECUTE;
             }
 
-            // For executable segments, we don't need to set a special flag on x86_64
-            // because pages are executable by default unless NX bit is set
-            // But let's add some debug info about the segment flags
             serial_println!(
                 "Segment {} ELF flags: readable={}, writable={}, executable={}",
                 i,
@@ -189,39 +179,105 @@ impl ProcessManager {
             );
             serial_println!("Segment {} page flags: {:?}", i, segment_flags);
 
-            serial_println!(
-                "Mapping segment {} to virtual address {:?}",
-                i,
-                segment_virtual_addr
-            );
-            address_space
-                .map_user_memory(
-                    segment_virtual_addr,
-                    segment_frame.start_address(),
-                    ph.p_memsz,
-                    segment_flags,
-                    frame_allocator,
-                )
-                .map_err(|e| {
-                    serial_println!("Failed to map segment {}: {:?}", i, e);
+            // Map each page for this segment
+            for page_idx in 0..pages_needed {
+                let page_virtual_addr = segment_virtual_addr + (page_idx * 4096);
+                
+                // Allocate frame for this page
+                let page_frame = frame_allocator.allocate_frame().ok_or_else(|| {
+                    serial_println!("Failed to allocate frame for segment {} page {}", i, page_idx);
                     ProcessError::OutOfMemory
                 })?;
 
-            // Copy segment data to the mapped memory
-            let segment_virtual_ptr = (physical_memory_offset
-                + segment_frame.start_address().as_u64())
-            .as_mut_ptr::<u8>();
-
-            unsafe {
-                // Zero out the entire segment first
-                core::ptr::write_bytes(segment_virtual_ptr, 0, ph.p_memsz as usize);
-
-                // Then copy the actual data
-                core::ptr::copy_nonoverlapping(
-                    segment_data.as_ptr(),
-                    segment_virtual_ptr,
-                    segment_data.len(),
+                serial_println!(
+                    "Mapping page {} of segment {} at virtual address {:?}",
+                    page_idx, i, page_virtual_addr
                 );
+                
+                address_space
+                    .map_user_memory(
+                        page_virtual_addr,
+                        page_frame.start_address(),
+                        4096,
+                        segment_flags,
+                        frame_allocator,
+                    )
+                    .map_err(|e| {
+                        serial_println!("Failed to map segment {} page {}: {:?}", i, page_idx, e);
+                        ProcessError::OutOfMemory
+                    })?;
+
+                // Copy segment data to this page if needed
+                let page_offset = page_idx * 4096;
+                let page_start_addr = segment_virtual_addr.as_u64() + page_offset;
+                let original_segment_start = mem_start;
+                let original_segment_end = original_segment_start + ph.p_filesz;
+                
+                // Calculate what part of this page should contain data
+                let data_start_in_page = if page_start_addr < original_segment_start {
+                    (original_segment_start - page_start_addr) as usize
+                } else {
+                    0
+                };
+                
+                let data_end_in_page = if page_start_addr + 4096 > original_segment_end {
+                    if original_segment_end > page_start_addr {
+                        (original_segment_end - page_start_addr) as usize
+                    } else {
+                        0
+                    }
+                } else {
+                    4096
+                };
+                
+                if data_start_in_page < data_end_in_page {
+                    let page_virtual_ptr = (physical_memory_offset + page_frame.start_address().as_u64()).as_mut_ptr::<u8>();
+                    
+                    // Calculate offset in the source data
+                    let src_offset = if page_start_addr >= original_segment_start {
+                        (page_start_addr - original_segment_start) as usize
+                    } else {
+                        0
+                    };
+                    
+                    let copy_size = data_end_in_page - data_start_in_page;
+                    
+                    if src_offset < segment_data.len() && copy_size > 0 {
+                        let actual_copy_size = core::cmp::min(copy_size, segment_data.len() - src_offset);
+                        let data_to_copy = &segment_data[src_offset..src_offset + actual_copy_size];
+                        
+                        unsafe {
+                            // Zero out the entire page first
+                            core::ptr::write_bytes(page_virtual_ptr, 0, 4096);
+                            
+                            // Copy the actual data for this page
+                            core::ptr::copy_nonoverlapping(
+                                data_to_copy.as_ptr(),
+                                page_virtual_ptr.add(data_start_in_page),
+                                data_to_copy.len(),
+                            );
+                        }
+                        
+                        serial_println!(
+                            "Copied {} bytes to page {} of segment {} (src_offset: {}, page_offset: {})",
+                            data_to_copy.len(), page_idx, i, src_offset, data_start_in_page
+                        );
+                    } else {
+                        // Zero the page if no data to copy
+                        let page_virtual_ptr = (physical_memory_offset + page_frame.start_address().as_u64()).as_mut_ptr::<u8>();
+                        unsafe {
+                            core::ptr::write_bytes(page_virtual_ptr, 0, 4096);
+                        }
+                        serial_println!("Zeroed page {} of segment {} (no data to copy)", page_idx, i);
+                    }
+                } else {
+                    // This page is beyond the file data, just zero it
+                    let page_virtual_ptr = (physical_memory_offset + page_frame.start_address().as_u64()).as_mut_ptr::<u8>();
+                    unsafe {
+                        core::ptr::write_bytes(page_virtual_ptr, 0, 4096);
+                    }
+                    serial_println!("Zeroed page {} of segment {} (beyond file data)", page_idx, i);
+                }
             }
 
             serial_println!(
@@ -232,10 +288,12 @@ impl ProcessManager {
             );
         }
 
-        let stack_pointer = stack_virtual_addr + 0x1000; // Stack grows downward
+        let stack_pointer = stack_virtual_addr + 0x1000 - 8; // Stack grows downward, point to top of stack minus 8 bytes for alignment
         let instruction_pointer = VirtAddr::new(elf.entry); // Start at ELF entry point
 
         serial_println!("Setting up process with PID {}", self.next_pid);
+        serial_println!("Stack pointer will be at: {:?}", stack_pointer);
+        serial_println!("Instruction pointer will be at: {:?}", instruction_pointer);
 
         let process = Process {
             pid: self.next_pid,
@@ -353,52 +411,43 @@ impl ProcessManager {
             serial_println!("Switched back to kernel page table");
         }
 
-        // Try a much more conservative approach - don't change page table yet
-        serial_println!("Now attempting user mode switch WITH page table change...");
+        // Actually switch to user mode using IRET
+        serial_println!("Switching to user mode using IRET...");
 
         unsafe {
+            // Switch to the process's page table
+            asm!("mov cr3, {}", in(reg) page_table_frame.start_address().as_u64());
+
+            // Prepare the stack for IRET to user mode
+            // We need to set up the stack with the values IRET expects:
+            // - SS (Stack Segment)
+            // - RSP (Stack Pointer)  
+            // - RFLAGS
+            // - CS (Code Segment)
+            // - RIP (Instruction Pointer)
+
             asm!(
-                // Switch to the process's page table
-                "mov cr3, {page_table}",
+                "
+                // Set up user mode segments
+                mov ax, {user_data_sel_16:x}
+                mov ds, ax
+                mov es, ax
+                mov fs, ax
+                mov gs, ax
 
-                // Zero out general-purpose registers before entering user mode
-                "xor rax, rax",
-                "xor rbx, rbx",
-                "xor rcx, rcx",
-                "xor rdx, rdx",
-                "xor rsi, rsi",
-                "xor rdi, rdi",
-                "xor rbp, rbp",
-                "xor r8, r8",
-                "xor r9, r9",
-                "xor r10, r10",
-                "xor r11, r11",
-                "xor r12, r12",
-                "xor r13, r13",
-                "xor r14, r14",
-                "xor r15, r15",
+                // Push values for IRET (in reverse order)
+                push {user_data_sel}        // SS
+                push {user_stack_ptr}       // RSP
+                push 0x202                  // RFLAGS (interrupts enabled)
+                push {user_code_sel}        // CS
+                push {user_ip}              // RIP
 
-                // Set user data segments before iretq
-                "mov ax, {user_data_sel:x}",
-                "mov ds, ax",
-                "mov es, ax",
-
-                // Set up the stack for iretq
-                // Push selectors and pointers to the stack.
-                // We use an intermediate register to ensure the full 64-bit value is pushed.
-                "mov rax, {user_data_sel}",
-                "push rax", // SS
-                "push {user_stack}",    // RSP
-                "push 0x200",           // RFLAGS (interrupts enabled)
-                "mov rax, {user_code_sel}",
-                "push rax", // CS
-                "push {user_ip}",       // RIP
-
-                // Jump to user mode
-                "iretq",
-                page_table = in(reg) page_table_frame.start_address().as_u64(),
+                // Switch to user mode
+                iretq
+                ",
+                user_data_sel_16 = in(reg) (user_data_sel as u16),
                 user_data_sel = in(reg) user_data_sel,
-                user_stack = in(reg) process.stack_pointer.as_u64(),
+                user_stack_ptr = in(reg) process.stack_pointer.as_u64(),
                 user_code_sel = in(reg) user_code_sel,
                 user_ip = in(reg) process.instruction_pointer.as_u64(),
                 options(noreturn)
