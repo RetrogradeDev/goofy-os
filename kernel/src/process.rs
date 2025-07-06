@@ -1,6 +1,8 @@
 use core::arch::asm;
 
 use alloc::vec::Vec;
+use lazy_static::lazy_static;
+use spin::Mutex;
 use x86_64::{
     VirtAddr,
     structures::paging::{FrameAllocator, PageTableFlags},
@@ -28,6 +30,7 @@ pub enum ProcessError {
     InvalidStackPointer,
 }
 
+#[derive(Clone, Copy)]
 pub struct Process {
     pub pid: u32,
     pub state: ProcessState,
@@ -38,7 +41,21 @@ pub struct Process {
     pub registers: RegisterState,
 }
 
+impl Process {
+    pub fn cleanup_resources(&mut self) {
+        // Clean up any resources associated with the process
+        self.state = ProcessState::Terminated;
+
+        self.address_space.cleanup();
+
+        serial_println!("Cleaning up resources for process with PID {}", self.pid);
+
+        // TODO: Clean up any other resources
+    }
+}
+
 #[repr(C)]
+#[derive(Clone, Copy)]
 pub struct RegisterState {
     pub rax: u64,
     pub rbx: u64,
@@ -157,9 +174,18 @@ impl ProcessManager {
             let segment_end_addr = mem_start + ph.p_memsz;
             let aligned_size = (segment_end_addr + 4095) & !0xfff - (mem_start & !0xfff); // Calculate aligned size
             let pages_needed = aligned_size / 4096;
-            
-            serial_println!("Segment {} needs {} pages ({} bytes)", i, pages_needed, aligned_size);
-            serial_println!("Original segment virtual address: 0x{:x}, aligned: {:?}", mem_start, segment_virtual_addr);
+
+            serial_println!(
+                "Segment {} needs {} pages ({} bytes)",
+                i,
+                pages_needed,
+                aligned_size
+            );
+            serial_println!(
+                "Original segment virtual address: 0x{:x}, aligned: {:?}",
+                mem_start,
+                segment_virtual_addr
+            );
 
             // Set appropriate flags based on ELF segment permissions
             let mut segment_flags = PageTableFlags::PRESENT | PageTableFlags::USER_ACCESSIBLE;
@@ -182,18 +208,24 @@ impl ProcessManager {
             // Map each page for this segment
             for page_idx in 0..pages_needed {
                 let page_virtual_addr = segment_virtual_addr + (page_idx * 4096);
-                
+
                 // Allocate frame for this page
                 let page_frame = frame_allocator.allocate_frame().ok_or_else(|| {
-                    serial_println!("Failed to allocate frame for segment {} page {}", i, page_idx);
+                    serial_println!(
+                        "Failed to allocate frame for segment {} page {}",
+                        i,
+                        page_idx
+                    );
                     ProcessError::OutOfMemory
                 })?;
 
                 serial_println!(
                     "Mapping page {} of segment {} at virtual address {:?}",
-                    page_idx, i, page_virtual_addr
+                    page_idx,
+                    i,
+                    page_virtual_addr
                 );
-                
+
                 address_space
                     .map_user_memory(
                         page_virtual_addr,
@@ -212,14 +244,14 @@ impl ProcessManager {
                 let page_start_addr = segment_virtual_addr.as_u64() + page_offset;
                 let original_segment_start = mem_start;
                 let original_segment_end = original_segment_start + ph.p_filesz;
-                
+
                 // Calculate what part of this page should contain data
                 let data_start_in_page = if page_start_addr < original_segment_start {
                     (original_segment_start - page_start_addr) as usize
                 } else {
                     0
                 };
-                
+
                 let data_end_in_page = if page_start_addr + 4096 > original_segment_end {
                     if original_segment_end > page_start_addr {
                         (original_segment_end - page_start_addr) as usize
@@ -229,27 +261,30 @@ impl ProcessManager {
                 } else {
                     4096
                 };
-                
+
                 if data_start_in_page < data_end_in_page {
-                    let page_virtual_ptr = (physical_memory_offset + page_frame.start_address().as_u64()).as_mut_ptr::<u8>();
-                    
+                    let page_virtual_ptr = (physical_memory_offset
+                        + page_frame.start_address().as_u64())
+                    .as_mut_ptr::<u8>();
+
                     // Calculate offset in the source data
                     let src_offset = if page_start_addr >= original_segment_start {
                         (page_start_addr - original_segment_start) as usize
                     } else {
                         0
                     };
-                    
+
                     let copy_size = data_end_in_page - data_start_in_page;
-                    
+
                     if src_offset < segment_data.len() && copy_size > 0 {
-                        let actual_copy_size = core::cmp::min(copy_size, segment_data.len() - src_offset);
+                        let actual_copy_size =
+                            core::cmp::min(copy_size, segment_data.len() - src_offset);
                         let data_to_copy = &segment_data[src_offset..src_offset + actual_copy_size];
-                        
+
                         unsafe {
                             // Zero out the entire page first
                             core::ptr::write_bytes(page_virtual_ptr, 0, 4096);
-                            
+
                             // Copy the actual data for this page
                             core::ptr::copy_nonoverlapping(
                                 data_to_copy.as_ptr(),
@@ -257,26 +292,42 @@ impl ProcessManager {
                                 data_to_copy.len(),
                             );
                         }
-                        
+
                         serial_println!(
                             "Copied {} bytes to page {} of segment {} (src_offset: {}, page_offset: {})",
-                            data_to_copy.len(), page_idx, i, src_offset, data_start_in_page
+                            data_to_copy.len(),
+                            page_idx,
+                            i,
+                            src_offset,
+                            data_start_in_page
                         );
                     } else {
                         // Zero the page if no data to copy
-                        let page_virtual_ptr = (physical_memory_offset + page_frame.start_address().as_u64()).as_mut_ptr::<u8>();
+                        let page_virtual_ptr = (physical_memory_offset
+                            + page_frame.start_address().as_u64())
+                        .as_mut_ptr::<u8>();
                         unsafe {
                             core::ptr::write_bytes(page_virtual_ptr, 0, 4096);
                         }
-                        serial_println!("Zeroed page {} of segment {} (no data to copy)", page_idx, i);
+                        serial_println!(
+                            "Zeroed page {} of segment {} (no data to copy)",
+                            page_idx,
+                            i
+                        );
                     }
                 } else {
                     // This page is beyond the file data, just zero it
-                    let page_virtual_ptr = (physical_memory_offset + page_frame.start_address().as_u64()).as_mut_ptr::<u8>();
+                    let page_virtual_ptr = (physical_memory_offset
+                        + page_frame.start_address().as_u64())
+                    .as_mut_ptr::<u8>();
                     unsafe {
                         core::ptr::write_bytes(page_virtual_ptr, 0, 4096);
                     }
-                    serial_println!("Zeroed page {} of segment {} (beyond file data)", page_idx, i);
+                    serial_println!(
+                        "Zeroed page {} of segment {} (beyond file data)",
+                        page_idx,
+                        i
+                    );
                 }
             }
 
@@ -324,138 +375,174 @@ impl ProcessManager {
         };
 
         let pid = self.next_pid;
+        self.current_pid = pid;
         self.processes.push(process);
         self.next_pid += 1;
         Ok(pid)
     }
 
-    pub fn switch_to_user_mode(&self, process: &Process, physical_memory_offset: VirtAddr) {
-        serial_println!(
-            "Preparing to switch to user mode for process {}",
-            process.pid
-        );
-        serial_println!(
-            "User IP: {:?}, User SP: {:?}",
-            process.instruction_pointer,
-            process.stack_pointer
-        );
+    /// Kills the process with the given PID and cleans up resources
+    pub fn kill_process(&mut self, pid: u32) -> Result<(), ProcessError> {
+        if let Some(index) = self.processes.iter().position(|p| p.pid == pid) {
+            serial_println!("Killing process with PID {}", pid);
 
-        // Get the page table frame for switching
-        let page_table_frame = process.address_space.page_table_frame;
+            // Clean up any resources associated with the process
+            let process = &mut self.processes[index];
+            process.cleanup_resources();
 
-        // Get user mode selectors from GDT - these should already have RPL=3
-        let user_code_sel = u64::from(crate::gdt::GDT.1.user_code.0) | 3;
-        let user_data_sel = u64::from(crate::gdt::GDT.1.user_data.0) | 3;
+            serial_println!("Process with PID {} is in state {:?}", pid, process.state);
 
-        serial_println!("User code selector: 0x{:x}", user_code_sel);
-        serial_println!("User data selector: 0x{:x}", user_data_sel);
+            // Finally remove the process from the list
+            self.processes.remove(index);
 
-        // Check if NX bit is enabled in EFER
-        let mut efer: u64;
-        unsafe {
-            asm!("mov {}, cr4", out(reg) efer);
-        }
-        serial_println!("CR4 register: 0x{:x}", efer);
+            serial_println!("Process with PID {} killed successfully", pid);
 
-        // Check EFER register
-        unsafe {
-            asm!("
-                mov ecx, 0xc0000080
-                rdmsr
-                mov {}, rax
-            ", out(reg) efer);
-        }
-        serial_println!("EFER register: 0x{:x}", efer);
-        if efer & (1 << 11) != 0 {
-            serial_println!("NX bit is ENABLED in EFER - pages are non-executable by default");
+            Ok(())
         } else {
-            serial_println!("NX bit is DISABLED in EFER");
-        }
-        serial_println!("Page table frame: {:?}", page_table_frame.start_address());
-
-        // Let's try to examine the program code before switching
-        serial_println!("Examining program memory before switch...");
-
-        // Look at the actual program code that was loaded
-        let program_frame_addr = physical_memory_offset + 0x1f000; // Updated from debug output
-        let program_ptr = program_frame_addr.as_ptr::<u8>();
-        unsafe {
-            serial_println!(
-                "Program code first 32 bytes: {:02x?}",
-                core::slice::from_raw_parts(program_ptr, 32)
-            );
-        }
-
-        // Let's also verify the process page table mapping
-        serial_println!("Verifying process page table mappings...");
-
-        // Let's temporarily switch to the process page table and see if we can read the program
-        let current_cr3: u64;
-        unsafe {
-            asm!("mov {}, cr3", out(reg) current_cr3);
-            serial_println!("Current CR3: 0x{:x}", current_cr3);
-            serial_println!(
-                "Switching to process CR3: 0x{:x}",
-                page_table_frame.start_address().as_u64()
-            );
-
-            // Switch to process page table temporarily
-            asm!("mov cr3, {}", in(reg) page_table_frame.start_address().as_u64());
-
-            // Try to read from the user program address - this might page fault, so let's be careful
-            serial_println!("Attempting to read from user address space...");
-            // We'll just switch back immediately since this might cause issues
-
-            // Switch back to kernel page table
-            asm!("mov cr3, {}", in(reg) current_cr3);
-            serial_println!("Switched back to kernel page table");
-        }
-
-        // Actually switch to user mode using IRET
-        serial_println!("Switching to user mode using IRET...");
-
-        unsafe {
-            // Switch to the process's page table
-            asm!("mov cr3, {}", in(reg) page_table_frame.start_address().as_u64());
-
-            // Prepare the stack for IRET to user mode
-            // We need to set up the stack with the values IRET expects:
-            // - SS (Stack Segment)
-            // - RSP (Stack Pointer)  
-            // - RFLAGS
-            // - CS (Code Segment)
-            // - RIP (Instruction Pointer)
-
-            asm!(
-                "
-                // Set up user mode segments
-                mov ax, {user_data_sel_16:x}
-                mov ds, ax
-                mov es, ax
-                mov fs, ax
-                mov gs, ax
-
-                // Push values for IRET (in reverse order)
-                push {user_data_sel}        // SS
-                push {user_stack_ptr}       // RSP
-                push 0x202                  // RFLAGS (interrupts enabled)
-                push {user_code_sel}        // CS
-                push {user_ip}              // RIP
-
-                // Switch to user mode
-                iretq
-                ",
-                user_data_sel_16 = in(reg) (user_data_sel as u16),
-                user_data_sel = in(reg) user_data_sel,
-                user_stack_ptr = in(reg) process.stack_pointer.as_u64(),
-                user_code_sel = in(reg) user_code_sel,
-                user_ip = in(reg) process.instruction_pointer.as_u64(),
-                options(noreturn)
-            );
+            serial_println!("Process with PID {} not found", pid);
+            Err(ProcessError::InvalidStateTransition)
         }
     }
 
     pub fn get_process(&self, pid: u32) -> Option<&Process> {
         self.processes.iter().find(|p| p.pid == pid)
+    }
+
+    pub fn exit_current_process(&mut self, exit_code: u8) {
+        serial_println!("Exiting current process with exit code {}", exit_code);
+
+        self.kill_process(self.current_pid)
+            .unwrap_or_else(|e| serial_println!("Failed to exit process: {:?}", e));
+
+        serial_println!("Current process exited, switching back to kernel mode");
+
+        self.current_pid = 0; // Reset current PID after exit
+    }
+}
+
+lazy_static! {
+    pub static ref PROCESS_MANAGER: Mutex<ProcessManager> = Mutex::new(ProcessManager::new());
+}
+
+pub fn switch_to_user_mode(process: &Process, physical_memory_offset: VirtAddr) {
+    serial_println!(
+        "Preparing to switch to user mode for process {}",
+        process.pid
+    );
+    serial_println!(
+        "User IP: {:?}, User SP: {:?}",
+        process.instruction_pointer,
+        process.stack_pointer
+    );
+
+    // Get the page table frame for switching
+    let page_table_frame = process.address_space.page_table_frame;
+
+    // Get user mode selectors from GDT - these should already have RPL=3
+    let user_code_sel = u64::from(crate::gdt::GDT.1.user_code.0) | 3;
+    let user_data_sel = u64::from(crate::gdt::GDT.1.user_data.0) | 3;
+
+    serial_println!("User code selector: 0x{:x}", user_code_sel);
+    serial_println!("User data selector: 0x{:x}", user_data_sel);
+
+    // Check if NX bit is enabled in EFER
+    let mut efer: u64;
+    unsafe {
+        asm!("mov {}, cr4", out(reg) efer);
+    }
+    serial_println!("CR4 register: 0x{:x}", efer);
+
+    // Check EFER register
+    unsafe {
+        asm!("
+            mov ecx, 0xc0000080
+            rdmsr
+            mov {}, rax
+        ", out(reg) efer);
+    }
+    serial_println!("EFER register: 0x{:x}", efer);
+    if efer & (1 << 11) != 0 {
+        serial_println!("NX bit is ENABLED in EFER - pages are non-executable by default");
+    } else {
+        serial_println!("NX bit is DISABLED in EFER");
+    }
+    serial_println!("Page table frame: {:?}", page_table_frame.start_address());
+
+    // Look at the actual program code that was loaded
+    let program_frame_addr = physical_memory_offset + 0x1f000;
+    let program_ptr = program_frame_addr.as_ptr::<u8>();
+    unsafe {
+        serial_println!(
+            "Program code first 32 bytes: {:02x?}",
+            core::slice::from_raw_parts(program_ptr, 32)
+        );
+    }
+
+    // Let's also verify the process page table mapping
+    serial_println!("Verifying process page table mappings...");
+
+    // Let's temporarily switch to the process page table and see if we can read the program
+    let current_cr3: u64;
+    unsafe {
+        asm!("mov {}, cr3", out(reg) current_cr3);
+        serial_println!("Current CR3: 0x{:x}", current_cr3);
+        serial_println!(
+            "Switching to process CR3: 0x{:x}",
+            page_table_frame.start_address().as_u64()
+        );
+
+        // Switch to process page table temporarily
+        asm!("mov cr3, {}", in(reg) page_table_frame.start_address().as_u64());
+
+        // Try to read from the user program address - this might page fault, so let's be careful
+        serial_println!("Attempting to read from user address space...");
+        // We'll just switch back immediately since this might cause issues
+
+        // Switch back to kernel page table
+        asm!("mov cr3, {}", in(reg) current_cr3);
+        serial_println!("Switched back to kernel page table");
+    }
+
+    // Actually switch to user mode using IRET
+    serial_println!("Switching to user mode using IRET...");
+
+    unsafe {
+        // Switch to the process's page table
+        asm!("mov cr3, {}", in(reg) page_table_frame.start_address().as_u64());
+
+        // Prepare the stack for IRET to user mode
+        // We need to set up the stack with the values IRET expects:
+        // - SS (Stack Segment)
+        // - RSP (Stack Pointer)
+        // - RFLAGS
+        // - CS (Code Segment)
+        // - RIP (Instruction Pointer)
+
+        asm!(
+            "
+            // Set up user mode segments
+            mov ax, {user_data_sel_16:x}
+            mov ds, ax
+            mov es, ax
+            mov fs, ax
+            mov gs, ax
+
+            // Push values for IRET (in reverse order)
+            push {user_data_sel}        // SS
+            push {user_stack_ptr}       // RSP
+            push 0x202                  // RFLAGS (interrupts enabled)
+            push {user_code_sel}        // CS
+            push {user_ip}              // RIP
+
+            // Switch to user mode
+            iretq
+            ",
+            user_data_sel_16 = in(reg) (user_data_sel as u16),
+            user_data_sel = in(reg) user_data_sel,
+            user_stack_ptr = in(reg) process.stack_pointer.as_u64(),
+            user_code_sel = in(reg) user_code_sel,
+            user_ip = in(reg) process.instruction_pointer.as_u64(),
+            options(noreturn)
+        );
     }
 }

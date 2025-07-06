@@ -1,4 +1,4 @@
-use crate::{hlt_loop, print, println, serial_println};
+use crate::{hlt_loop, print, println, process::PROCESS_MANAGER, serial_println};
 use core::arch::naked_asm;
 use lazy_static::lazy_static;
 use pic8259::ChainedPics;
@@ -133,6 +133,7 @@ extern "x86-interrupt" fn keyboard_interrupt_handler(_stack_frame: InterruptStac
 }
 
 // Debug version to figure out correct register values
+// TODO
 #[unsafe(naked)]
 unsafe extern "C" fn syscall_handler_asm() {
     naked_asm!(
@@ -177,7 +178,7 @@ unsafe extern "C" fn syscall_handler_asm() {
     );
 }
 
-// Debug version to figure out correct register values
+// TODO Debug version to figure out correct register values
 extern "C" fn syscall_handler_rust_debug(rax: u64, rdi: u64, rsi: u64, rdx: u64) -> u64 {
     serial_println!("Syscall handler (Rust) called");
     serial_println!(
@@ -229,8 +230,18 @@ fn sys_exit(exit_code: u64) -> u64 {
     serial_println!("sys_exit called with code: {}", exit_code);
     serial_println!("Process exiting...");
 
-    // TODO: Clean up the process stack
-    crate::hlt_loop();
+    // Clean up the process resources
+    PROCESS_MANAGER.lock().exit_current_process(exit_code as u8);
+
+    serial_println!("Process exited with code: {}", exit_code);
+
+    // TODO: Switch back to the kernel or halt the system
+    // For now, just halt the system
+    loop {
+        x86_64::instructions::hlt();
+    }
+
+    exit_code
 }
 
 #[cfg(test)]
