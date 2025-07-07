@@ -80,19 +80,24 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     draw_circle((600, 600), 50, kernel::framebuffer::Color::new(255, 0, 255));
     draw_circle_outline((700, 600), 75, kernel::framebuffer::Color::new(0, 255, 255));
 
+    let phys_mem_offset = VirtAddr::new(boot_info.physical_memory_offset.into_option().unwrap());
+
     // Initialize the OS
-    kernel::init();
+    kernel::init(phys_mem_offset);
 
     serial_println!("Kernel initialized, setting up memory...");
     println!("Kernel initialized successfully!");
-
-    let phys_mem_offset = VirtAddr::new(boot_info.physical_memory_offset.into_option().unwrap());
 
     serial_println!("Physical memory offset: {:?}", phys_mem_offset);
 
     let mut mapper = unsafe { memory::init(phys_mem_offset) };
 
     serial_println!("Memory mapper initialized successfully!");
+
+    // Store the kernel page table address for interrupt handlers
+    let kernel_cr3 = x86_64::registers::control::Cr3::read().0.start_address();
+    kernel::interrupts::set_kernel_page_table(kernel_cr3);
+    serial_println!("Kernel CR3: 0x{:x}", kernel_cr3.as_u64());
 
     let mut frame_allocator = unsafe { BootInfoFrameAllocator::init(&boot_info.memory_regions) };
 
@@ -104,7 +109,7 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
 
     println!("Hello World{}", "!");
 
-    run_example_program(&mut frame_allocator, phys_mem_offset);
+    // run_example_program(&mut frame_allocator, phys_mem_offset);
 
     // Some tests for the heap allocator
     let heap_value = alloc::boxed::Box::new(41);
@@ -119,8 +124,62 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     test_main();
 
     let mut executor = Executor::new();
-    executor.spawn(Task::new(example_task()));
+
+    // Spawn the keyboard task first with high priority
+    serial_println!("Spawning keyboard task...");
     executor.spawn(Task::new(kernel::task::keyboard::print_keypresses()));
+
+    executor.spawn(Task::new(example_task()));
+
+    // Add a persistent heartbeat task that never completes
+    serial_println!("Spawning heartbeat task...");
+    executor.spawn(Task::new(async {
+        let mut counter = 0;
+        loop {
+            counter += 1;
+            serial_println!(
+                "Heartbeat #{} - system is alive, checking for keyboard input",
+                counter
+            );
+
+            // Yield to other tasks
+            kernel::task::yield_now().await;
+
+            // Wait a bit before next heartbeat
+            for _ in 0..500000 {
+                core::hint::spin_loop();
+            }
+        }
+    }));
+
+    // Spawn the background scheduler to keep the process manager alive
+    serial_println!("Spawning background scheduler...");
+    executor.spawn(Task::new(kernel::process::process_scheduler_background())); // Spawn the example program task
+    serial_println!("Spawning example program task...");
+    executor.spawn(Task::new(async move {
+        serial_println!("Example program task: Starting real process execution...");
+        let exit_code = run_example_program(&mut frame_allocator, phys_mem_offset).await;
+        serial_println!("Example program finished with exit code: {}", exit_code);
+
+        // After the example program finishes, keep the system alive with an infinite task
+        serial_println!("Example program completed, entering maintenance mode...");
+        let mut maintenance_counter = 0;
+        loop {
+            maintenance_counter += 1;
+            serial_println!(
+                "Maintenance task #{} - system ready for input",
+                maintenance_counter
+            );
+            kernel::task::yield_now().await;
+
+            // Shorter wait to be more responsive
+            for _ in 0..300000 {
+                core::hint::spin_loop();
+            }
+        }
+    }));
+
+    serial_println!("Starting executor main loop...");
     executor.run();
 }
 

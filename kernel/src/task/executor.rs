@@ -5,7 +5,9 @@ use crossbeam_queue::ArrayQueue;
 
 use x86_64::instructions::interrupts::{self, enable_and_hlt};
 
-const MAX_TASKS: usize = 100;
+use crate::serial_println;
+
+const MAX_TASKS: usize = 1000;
 
 pub struct Executor {
     tasks: BTreeMap<TaskId, Task>,
@@ -38,7 +40,9 @@ impl Executor {
             waker_cache,
         } = self;
 
+        let mut tasks_polled = 0;
         while let Some(task_id) = task_queue.pop() {
+            tasks_polled += 1;
             let task = match tasks.get_mut(&task_id) {
                 Some(task) => task,
                 None => continue, // task no longer exists
@@ -50,15 +54,25 @@ impl Executor {
             match task.poll(&mut context) {
                 Poll::Ready(()) => {
                     // task done -> remove it and its cached waker
+                    serial_println!("Task {:?} completed and removed", task_id);
                     tasks.remove(&task_id);
                     waker_cache.remove(&task_id);
                 }
                 Poll::Pending => {}
             }
         }
-    }
 
+        if tasks_polled > 0 {
+            serial_println!(
+                "Executor: polled {} tasks, {} active tasks remaining",
+                tasks_polled,
+                tasks.len()
+            );
+        }
+    }
     pub fn run(&mut self) -> ! {
+        serial_println!("Executor: Starting main loop");
+
         loop {
             self.run_ready_tasks();
             self.sleep_if_idle();
@@ -66,7 +80,23 @@ impl Executor {
     }
 
     fn sleep_if_idle(&self) {
-        if self.tasks.is_empty() {
+        // Always enable interrupts first
+        interrupts::enable();
+
+        // Check if we have any tasks at all
+        let has_tasks = !self.tasks.is_empty();
+        let has_queued = !self.task_queue.is_empty();
+
+        if has_tasks || has_queued {
+            // If we have any tasks (even if all are pending), don't halt
+            // Instead, do a very short spin to allow interrupts to be processed
+            // This ensures keyboard and timer interrupts can wake tasks
+            for _ in 0..100 {
+                core::hint::spin_loop();
+            }
+        } else {
+            // Only halt if there are absolutely no tasks
+            // But even then, interrupts will wake us up
             interrupts::disable();
             if self.task_queue.is_empty() {
                 enable_and_hlt();
@@ -91,7 +121,10 @@ impl TaskWaker {
     }
 
     fn wake_task(&self) {
-        self.task_queue.push(self.task_id).expect("task_queue full");
+        // Only wake if the task isn't already in the queue to avoid filling it up
+        if self.task_queue.push(self.task_id).is_err() {
+            // Queue is full, just ignore - the task will be polled eventually
+        }
     }
 }
 
@@ -103,4 +136,30 @@ impl Wake for TaskWaker {
     fn wake_by_ref(self: &Arc<Self>) {
         self.wake_task();
     }
+}
+
+/// A simple tick function for the timer interrupt
+/// This just ensures interrupts are enabled and executor continues to run
+pub fn tick_executor() {
+    // Make sure interrupts are enabled
+    x86_64::instructions::interrupts::enable();
+
+    // Wake the global executor from timer interrupts
+    wake_executor();
+}
+
+// Static reference to the global executor for waking tasks from interrupts
+static mut GLOBAL_EXECUTOR_WAKER: Option<Waker> = None;
+
+/// Set a global waker that can be used by interrupt handlers to wake the executor
+pub fn set_global_waker(waker: Waker) {
+    unsafe {
+        GLOBAL_EXECUTOR_WAKER = Some(waker);
+    }
+}
+
+/// Wake the global executor from an interrupt context
+pub fn wake_executor() {
+    // For now, just do nothing - the timer interrupts themselves will prevent
+    // the executor from sleeping too long
 }

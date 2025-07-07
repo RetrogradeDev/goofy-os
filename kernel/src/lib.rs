@@ -7,6 +7,7 @@
 
 #[cfg(test)]
 use bootloader_api::{BootInfo, entry_point};
+use conquer_once::spin::OnceCell;
 
 use core::panic::PanicInfo;
 use exit::{QemuExitCode, exit_qemu};
@@ -33,7 +34,12 @@ pub static BOOTLOADER_CONFIG: BootloaderConfig = {
     config
 };
 
-pub fn init() {
+pub static PHYSICAL_MEMORY_OFFSET: OnceCell<x86_64::VirtAddr> = OnceCell::uninit();
+
+pub fn init(physical_memory_offset: x86_64::VirtAddr) {
+    // Initialize the physical memory offset
+    PHYSICAL_MEMORY_OFFSET.init_once(|| physical_memory_offset);
+
     serial_println!("Initializing interrupts...");
     interrupts::init_idt();
     serial_println!("Initializing GDT...");
@@ -86,8 +92,12 @@ entry_point!(test_kernel_main, config = &BOOTLOADER_CONFIG);
 
 /// Entry point for `cargo test`
 #[cfg(test)]
-fn test_kernel_main(_boot_info: &'static mut BootInfo) -> ! {
-    init();
+fn test_kernel_main(boot_info: &'static mut BootInfo) -> ! {
+    use x86_64::VirtAddr;
+
+    init(VirtAddr::new(
+        boot_info.physical_memory_offset.into_option().unwrap(),
+    ));
     test_main();
     hlt_loop();
 }
