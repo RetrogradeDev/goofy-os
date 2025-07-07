@@ -1,9 +1,5 @@
 use core::arch::asm;
-use core::future::Future;
-use core::pin::Pin;
-use core::task::{Context, Poll, Waker};
 
-use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
 use lazy_static::lazy_static;
 use spin::Mutex;
@@ -20,8 +16,6 @@ use crate::{
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProcessState {
     Ready,
-    Running,
-    Waiting,
     Terminated,
 }
 
@@ -86,97 +80,6 @@ pub struct ProcessManager {
     current_pid: u32,
     next_pid: u32,
     kernel_cr3: u64,
-    scheduler_state: SchedulerState,
-    process_wakers: BTreeMap<u32, Waker>, // Store wakers for each process
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum SchedulerState {
-    Idle,
-    RunningProcess(u32),
-    ProcessExited(u32),
-}
-
-pub struct ProcessFuture {
-    pid: u32,
-    completed: bool,
-}
-
-impl ProcessFuture {
-    pub fn new(pid: u32) -> Self {
-        Self {
-            pid,
-            completed: false,
-        }
-    }
-}
-
-impl Future for ProcessFuture {
-    type Output = u8; // Exit code
-
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        if self.completed {
-            return Poll::Ready(0);
-        }
-
-        let mut pm = PROCESS_MANAGER.lock();
-
-        // Check if process exists and is not terminated
-        if let Some(process) = pm.get_process(self.pid) {
-            match process.state {
-                ProcessState::Terminated => {
-                    serial_println!("Process {} is terminated, completing future", self.pid);
-                    self.completed = true;
-                    Poll::Ready(0) // Process completed
-                }
-                ProcessState::Ready => {
-                    // Start the process if it's ready and no other process is running
-                    if matches!(pm.scheduler_state, SchedulerState::Idle) {
-                        serial_println!("Starting process {} in async context", self.pid);
-                        pm.start_process_async(self.pid);
-
-                        // Store the waker so it can be called when the process exits
-                        pm.set_process_waker(self.pid, cx.waker().clone());
-
-                        // Mark that we're about to start user mode execution
-                        pm.scheduler_state = SchedulerState::RunningProcess(self.pid);
-
-                        // Return pending immediately - the actual user mode switch will happen
-                        // when the timer interrupt calls the scheduler
-                        serial_println!(
-                            "Process {} scheduled to start, returning pending",
-                            self.pid
-                        );
-                        Poll::Pending
-                    } else {
-                        cx.waker().wake_by_ref(); // Try again later
-                        Poll::Pending
-                    }
-                }
-                ProcessState::Running => {
-                    // Process is running, just wait for it to terminate
-                    // Store the waker so it can be called when the process exits
-                    pm.set_process_waker(self.pid, cx.waker().clone());
-
-                    serial_println!("Process {} is running, waiting for termination", self.pid);
-                    Poll::Pending
-                }
-                ProcessState::Waiting => {
-                    // Process is waiting, check back later
-                    cx.waker().wake_by_ref();
-                    Poll::Pending
-                }
-            }
-        } else {
-            // Process doesn't exist or was cleaned up
-            serial_println!(
-                "Process {} doesn't exist, completing future with error",
-                self.pid
-            );
-            self.completed = true;
-            Poll::Ready(1) // Error exit code
-        }
-    }
 }
 
 impl ProcessManager {
@@ -192,8 +95,6 @@ impl ProcessManager {
             current_pid: 0,
             next_pid: 1,
             kernel_cr3,
-            scheduler_state: SchedulerState::Idle,
-            process_wakers: BTreeMap::new(),
         }
     }
 
@@ -209,13 +110,9 @@ impl ProcessManager {
         );
 
         // Parse the ELF binary
-        serial_println!("Parsing ELF binary...");
         let elf = goblin::elf::Elf::parse(binary).expect("Failed to parse ELF");
         serial_println!("ELF entry point: 0x{:x}", elf.entry);
         serial_println!("ELF has {} program headers", elf.program_headers.len());
-
-        // Add yield point after ELF parsing
-        crate::task::yield_now_blocking();
 
         // Create the address space first
         serial_println!("Creating address space...");
@@ -259,28 +156,29 @@ impl ProcessManager {
                 continue;
             }
 
-            serial_println!("=== Processing segment {} ===", i);
-            serial_println!("Segment virtual address: 0x{:x}", ph.p_vaddr);
-            serial_println!("Segment file size: {} bytes", ph.p_filesz);
-            serial_println!("Segment memory size: {} bytes", ph.p_memsz);
+            serial_println!(
+                "Loading segment {} at vaddr 0x{:x}, size {} bytes",
+                i,
+                ph.p_vaddr,
+                ph.p_filesz
+            );
 
-            // Add cooperative yield point during ELF loading
-            crate::task::yield_now_blocking();
+            let mem_start = ph.p_vaddr;
+            let file_start = ph.p_offset as usize;
+            let file_end = file_start + ph.p_filesz as usize;
 
-            // Extract the segment data from the binary
-            let segment_data = if ph.p_filesz > 0 {
-                &binary[ph.p_offset as usize..(ph.p_offset + ph.p_filesz) as usize]
-            } else {
-                &[]
-            };
-            serial_println!("Extracted {} bytes of segment data", segment_data.len());
+            if file_end > binary.len() {
+                serial_println!("Segment {} extends beyond binary data", i);
+                return Err(ProcessError::InvalidProgram);
+            }
+
+            let segment_data = &binary[file_start..file_end];
 
             // Calculate how many pages we need for this segment
-            let segment_virtual_addr = VirtAddr::new(ph.p_vaddr & !0xfff); // Page-align the start address
-            let segment_end_addr = ph.p_vaddr + ph.p_memsz;
-            let aligned_size = (segment_end_addr + 4095) & !0xfff - (ph.p_vaddr & !0xfff); // Calculate aligned size
+            let segment_virtual_addr = VirtAddr::new(mem_start & !0xfff); // Page-align the start address
+            let segment_end_addr = mem_start + ph.p_memsz;
+            let aligned_size = (segment_end_addr + 4095) & !0xfff - (mem_start & !0xfff); // Calculate aligned size
             let pages_needed = aligned_size / 4096;
-            let mem_start = ph.p_vaddr; // Start address in memory for this segment
 
             serial_println!(
                 "Segment {} needs {} pages ({} bytes)",
@@ -290,7 +188,7 @@ impl ProcessManager {
             );
             serial_println!(
                 "Original segment virtual address: 0x{:x}, aligned: {:?}",
-                ph.p_vaddr,
+                mem_start,
                 segment_virtual_addr
             );
 
@@ -501,45 +399,6 @@ impl ProcessManager {
             .any(|p| p.state != ProcessState::Terminated)
     }
 
-    /// Start a process asynchronously without blocking
-    pub fn start_process_async(&mut self, pid: u32) {
-        if let Some(process) = self.processes.iter_mut().find(|p| p.pid == pid) {
-            process.state = ProcessState::Running;
-            self.current_pid = pid;
-            self.scheduler_state = SchedulerState::RunningProcess(pid);
-
-            serial_println!("Process {} state changed to Running", pid);
-            serial_println!("Process {} will be switched to user mode", pid);
-        }
-    }
-
-    /// Get process info for switching to user mode
-    pub fn get_process_for_execution(
-        &self,
-        pid: u32,
-    ) -> Option<(VirtAddr, VirtAddr, x86_64::PhysAddr)> {
-        if let Some(process) = self.get_process(pid) {
-            Some((
-                process.instruction_pointer,
-                process.stack_pointer,
-                process.address_space.page_table_frame.start_address(),
-            ))
-        } else {
-            None
-        }
-    }
-
-    /// Add a new process to the ready queue
-    pub fn add_ready_process(&mut self, process: Process) {
-        self.processes.push(process);
-        serial_println!("Added new ready process with PID {}", process.pid);
-    }
-
-    /// Check if the scheduler needs new processes
-    pub fn needs_processes(&self) -> bool {
-        !self.has_running_processes() && matches!(self.scheduler_state, SchedulerState::Idle)
-    }
-
     /// Kills the process with the given PID and cleans up resources
     pub fn kill_process(&mut self, pid: u32) -> Result<(), ProcessError> {
         if let Some(index) = self.processes.iter().position(|p| p.pid == pid) {
@@ -567,32 +426,6 @@ impl ProcessManager {
         self.processes.iter().find(|p| p.pid == pid)
     }
 
-    pub fn mark_current_process_for_exit(&mut self, exit_code: u8) {
-        serial_println!("Marking current process for exit with code {}", exit_code);
-
-        // Find the current process and mark it as terminated
-        if let Some(process) = self
-            .processes
-            .iter_mut()
-            .find(|p| p.pid == self.current_pid)
-        {
-            process.state = ProcessState::Terminated;
-            serial_println!("Process {} marked as Terminated", self.current_pid);
-
-            // Wake the ProcessFuture so it can detect the termination
-            self.wake_process_waker(self.current_pid);
-        } else {
-            serial_println!(
-                "Warning: Could not find current process {} to mark for exit",
-                self.current_pid
-            );
-        }
-
-        // DON'T update scheduler state yet - let the ProcessFuture handle the cleanup
-        // after it safely returns from user mode
-        serial_println!("Process {} marked for delayed cleanup", self.current_pid);
-    }
-
     pub fn exit_current_process(&mut self, exit_code: u8) {
         serial_println!("Exiting current process with exit code {}", exit_code);
 
@@ -605,45 +438,12 @@ impl ProcessManager {
             );
         }
 
-        // Update scheduler state
-        self.scheduler_state = SchedulerState::ProcessExited(self.current_pid);
-
         self.kill_process(self.current_pid)
             .unwrap_or_else(|e| serial_println!("Failed to exit process: {:?}", e));
 
         serial_println!("Current process exited");
 
         self.current_pid = 0; // Reset current PID after exit
-        self.scheduler_state = SchedulerState::Idle;
-    }
-
-    /// Store a waker for a process so it can be notified when the process exits
-    pub fn set_process_waker(&mut self, pid: u32, waker: Waker) {
-        serial_println!("Setting waker for process {}", pid);
-        self.process_wakers.insert(pid, waker);
-    }
-
-    /// Wake the waker for a process (called when process exits)
-    pub fn wake_process_waker(&mut self, pid: u32) {
-        if let Some(waker) = self.process_wakers.remove(&pid) {
-            serial_println!("Waking ProcessFuture for process {}", pid);
-            waker.wake();
-        } else {
-            serial_println!("No waker found for process {}", pid);
-        }
-    }
-
-    /// Check if there's a process that needs to be started and return its execution info
-    pub fn check_for_process_to_start(
-        &mut self,
-    ) -> Option<(u32, VirtAddr, VirtAddr, x86_64::PhysAddr)> {
-        if let SchedulerState::RunningProcess(pid) = self.scheduler_state {
-            if let Some((ip, sp, page_table_addr)) = self.get_process_for_execution(pid) {
-                serial_println!("Process {} ready to start from timer interrupt", pid);
-                return Some((pid, ip, sp, page_table_addr));
-            }
-        }
-        None
     }
 }
 
@@ -651,125 +451,99 @@ lazy_static! {
     pub static ref PROCESS_MANAGER: Mutex<ProcessManager> = Mutex::new(ProcessManager::new());
 }
 
-/// Create and run a process asynchronously
-pub async fn run_process_async(
-    binary: &[u8],
-    frame_allocator: &mut BootInfoFrameAllocator,
-    physical_memory_offset: VirtAddr,
-) -> u8 {
-    // Create the process
-    let pid = {
-        let mut pm = PROCESS_MANAGER.lock();
-        match pm.create_process(binary, frame_allocator, physical_memory_offset) {
-            Ok(pid) => {
-                serial_println!("Created process with PID: {} (async)", pid);
-                pid
-            }
-            Err(e) => {
-                serial_println!("Failed to create process: {:?}", e);
-                return 1; // Error exit code
-            }
-        }
-    };
+pub fn switch_to_user_mode(process: &Process, physical_memory_offset: VirtAddr) {
+    serial_println!(
+        "Preparing to switch to user mode for process {}",
+        process.pid
+    );
+    serial_println!(
+        "User IP: {:?}, User SP: {:?}",
+        process.instruction_pointer,
+        process.stack_pointer
+    );
 
-    // Start the process and signal it's ready to run
-    {
-        let mut pm = PROCESS_MANAGER.lock();
-        pm.start_process_async(pid);
-    }
+    // Get the page table frame for switching
+    let page_table_frame = process.address_space.page_table_frame;
 
-    // Use ProcessFuture to wait for the process to complete
-    let process_future = ProcessFuture::new(pid);
-
-    // Wait for the process to complete
-    process_future.await
-}
-
-/// Background scheduler that keeps the process manager alive
-pub async fn process_scheduler_background() {
-    serial_println!("Starting background process scheduler...");
-
-    let mut tick_counter = 0;
-    loop {
-        tick_counter += 1;
-
-        // Check for processes that need cleanup
-        {
-            let mut pm = PROCESS_MANAGER.lock();
-
-            // Check scheduler state and log it (less frequently)
-            if tick_counter % 50 == 0 {
-                serial_println!(
-                    "Background scheduler tick #{} - state: {:?}",
-                    tick_counter,
-                    pm.scheduler_state
-                );
-            }
-
-            // Clean up processes marked for exit
-            match pm.scheduler_state {
-                SchedulerState::ProcessExited(pid) => {
-                    serial_println!("Background scheduler cleaning up exited process {}", pid);
-                    pm.exit_current_process(0); // Complete the cleanup
-                    serial_println!("Process {} cleanup completed", pid);
-                }
-                _ => {
-                    // Also check for terminated processes that haven't been marked for cleanup yet
-                    // This handles the case where the ProcessFuture gets stuck and can't trigger cleanup
-                    let terminated_processes: Vec<u32> = pm
-                        .processes
-                        .iter()
-                        .filter(|p| p.state == ProcessState::Terminated)
-                        .map(|p| p.pid)
-                        .collect();
-
-                    if !terminated_processes.is_empty() {
-                        serial_println!(
-                            "Found {} terminated processes that need cleanup",
-                            terminated_processes.len()
-                        );
-                        for pid in terminated_processes {
-                            serial_println!(
-                                "Background scheduler force-cleaning up terminated process {}",
-                                pid
-                            );
-                            pm.scheduler_state = SchedulerState::ProcessExited(pid);
-                            break; // Handle one at a time
-                        }
-                    }
-                }
-            }
-        }
-
-        // Don't switch to user mode directly from here - this would kill the background task
-        // Instead, just yield and let the syscall handler or other mechanisms handle process switching
-
-        // Yield to allow other tasks to run
-        crate::task::yield_now().await;
-
-        // Small delay to prevent busy waiting but keep the scheduler alive
-        for _ in 0..10000 {
-            core::hint::spin_loop();
-        }
-    }
-}
-
-/// Switch to user mode without requiring a Process reference
-pub fn switch_to_user_mode_direct(
-    instruction_pointer: VirtAddr,
-    stack_pointer: VirtAddr,
-    page_table_frame_addr: x86_64::PhysAddr,
-) {
-    serial_println!("Switching to user mode (direct)");
-    serial_println!("IP: {:?}, SP: {:?}", instruction_pointer, stack_pointer);
-
-    // Get user mode selectors from GDT
+    // Get user mode selectors from GDT - these should already have RPL=3
     let user_code_sel = u64::from(crate::gdt::GDT.1.user_code.0) | 3;
     let user_data_sel = u64::from(crate::gdt::GDT.1.user_data.0) | 3;
 
+    serial_println!("User code selector: 0x{:x}", user_code_sel);
+    serial_println!("User data selector: 0x{:x}", user_data_sel);
+
+    // Check if NX bit is enabled in EFER
+    let mut efer: u64;
+    unsafe {
+        asm!("mov {}, cr4", out(reg) efer);
+    }
+    serial_println!("CR4 register: 0x{:x}", efer);
+
+    // Check EFER register
+    unsafe {
+        asm!("
+            mov ecx, 0xc0000080
+            rdmsr
+            mov {}, rax
+        ", out(reg) efer);
+    }
+    serial_println!("EFER register: 0x{:x}", efer);
+    if efer & (1 << 11) != 0 {
+        serial_println!("NX bit is ENABLED in EFER - pages are non-executable by default");
+    } else {
+        serial_println!("NX bit is DISABLED in EFER");
+    }
+    serial_println!("Page table frame: {:?}", page_table_frame.start_address());
+
+    // Look at the actual program code that was loaded
+    let program_frame_addr = physical_memory_offset + 0x1f000;
+    let program_ptr = program_frame_addr.as_ptr::<u8>();
+    unsafe {
+        serial_println!(
+            "Program code first 32 bytes: {:02x?}",
+            core::slice::from_raw_parts(program_ptr, 32)
+        );
+    }
+
+    // Let's also verify the process page table mapping
+    serial_println!("Verifying process page table mappings...");
+
+    // Let's temporarily switch to the process page table and see if we can read the program
+    let current_cr3: u64;
+    unsafe {
+        asm!("mov {}, cr3", out(reg) current_cr3);
+        serial_println!("Current CR3: 0x{:x}", current_cr3);
+        serial_println!(
+            "Switching to process CR3: 0x{:x}",
+            page_table_frame.start_address().as_u64()
+        );
+
+        // Switch to process page table temporarily
+        asm!("mov cr3, {}", in(reg) page_table_frame.start_address().as_u64());
+
+        // Try to read from the user program address - this might page fault, so let's be careful
+        serial_println!("Attempting to read from user address space...");
+        // We'll just switch back immediately since this might cause issues
+
+        // Switch back to kernel page table
+        asm!("mov cr3, {}", in(reg) current_cr3);
+        serial_println!("Switched back to kernel page table");
+    }
+
+    // Actually switch to user mode using IRET
+    serial_println!("Switching to user mode using IRET...");
+
     unsafe {
         // Switch to the process's page table
-        asm!("mov cr3, {}", in(reg) page_table_frame_addr.as_u64());
+        asm!("mov cr3, {}", in(reg) page_table_frame.start_address().as_u64());
+
+        // Prepare the stack for IRET to user mode
+        // We need to set up the stack with the values IRET expects:
+        // - SS (Stack Segment)
+        // - RSP (Stack Pointer)
+        // - RFLAGS
+        // - CS (Code Segment)
+        // - RIP (Instruction Pointer)
 
         asm!(
             "
@@ -792,9 +566,9 @@ pub fn switch_to_user_mode_direct(
             ",
             user_data_sel_16 = in(reg) (user_data_sel as u16),
             user_data_sel = in(reg) user_data_sel,
-            user_stack_ptr = in(reg) stack_pointer.as_u64(),
+            user_stack_ptr = in(reg) process.stack_pointer.as_u64(),
             user_code_sel = in(reg) user_code_sel,
-            user_ip = in(reg) instruction_pointer.as_u64(),
+            user_ip = in(reg) process.instruction_pointer.as_u64(),
             options(noreturn)
         );
     }
