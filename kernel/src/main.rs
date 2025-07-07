@@ -11,7 +11,6 @@ extern crate alloc;
 use bootloader_api::{BootInfo, entry_point};
 use kernel::{
     // framebuffer::clear_screen,
-    example_program::run_example_program,
     framebuffer::{FRAMEBUFFER, FrameBufferWriter},
     graphics::{
         draw_circle, draw_circle_outline, draw_line, draw_rect, draw_rect_outline, set_pixel,
@@ -104,7 +103,14 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
 
     println!("Hello World{}", "!");
 
-    run_example_program(&mut frame_allocator, phys_mem_offset);
+    // Queue the example program instead of running it directly
+    // This allows the kernel to continue while the process runs via timer scheduling
+    match kernel::process::queue_example_program(&mut frame_allocator, phys_mem_offset) {
+        Ok(pid) => serial_println!("Successfully queued process with PID: {}", pid),
+        Err(e) => serial_println!("Failed to queue process: {:?}", e),
+    }
+
+    // Continue with the rest of kernel initialization - this will now run concurrently with processes
 
     // Some tests for the heap allocator
     let heap_value = alloc::boxed::Box::new(41);

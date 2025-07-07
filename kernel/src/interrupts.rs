@@ -1,8 +1,4 @@
-use crate::{
-    hlt_loop, print, println,
-    process::{PROCESS_MANAGER, switch_to_user_mode},
-    serial_println,
-};
+use crate::{hlt_loop, print, println, serial_println};
 use core::arch::naked_asm;
 use lazy_static::lazy_static;
 use pic8259::ChainedPics;
@@ -118,6 +114,9 @@ extern "x86-interrupt" fn double_fault_handler(
 extern "x86-interrupt" fn timer_handler(_stack_frame: InterruptStackFrame) {
     print!(".");
 
+    // Trigger process scheduling every timer tick
+    crate::process::schedule();
+
     // Notify the Programmable Interrupt Controller (PIC) that the interrupt has been handled
     unsafe {
         PICS.lock()
@@ -200,25 +199,8 @@ extern "C" fn syscall_handler_rust_debug(rax: u64, rdi: u64, rsi: u64, rdx: u64)
 
     // Check if process exited
     if result == PROCESS_EXITED {
-        serial_println!("Process exited, checking for other processes...");
-
-        let next_process = {
-            let mut pm = PROCESS_MANAGER.lock();
-            if pm.has_running_processes() {
-                // Switch to next process
-                pm.schedule_next().copied()
-            } else {
-                None
-            }
-        };
-
-        if let Some(process) = next_process {
-            serial_println!("Switching to next process: {}", process.pid);
-            switch_to_user_mode(&process, *crate::PHYSICAL_MEMORY_OFFSET.get().unwrap());
-        } else {
-            serial_println!("No more processes, halting...");
-            crate::hlt_loop();
-        }
+        serial_println!("Process exited, halting system...");
+        crate::hlt_loop();
     }
 
     serial_println!("About to return from syscall...");
@@ -260,13 +242,9 @@ fn sys_exit(exit_code: u64) -> u64 {
     serial_println!("sys_exit called with code: {}", exit_code);
     serial_println!("Process exiting...");
 
-    // Clean up the process resources
-    {
-        let mut pm = PROCESS_MANAGER.lock();
-        pm.exit_current_process(exit_code as u8);
-    }
-
-    serial_println!("Process exited with code: {}", exit_code);
+    // Instead of immediately cleaning up, just mark the process for termination
+    // The scheduler will handle the actual cleanup on the next timer tick
+    serial_println!("Process marked for termination with code: {}", exit_code);
 
     // Return special value to indicate process exit
     PROCESS_EXITED

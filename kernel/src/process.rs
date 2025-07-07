@@ -16,6 +16,7 @@ use crate::{
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProcessState {
     Ready,
+    Running,
     Terminated,
 }
 
@@ -380,7 +381,7 @@ impl ProcessManager {
         };
 
         let pid = self.next_pid;
-        self.current_pid = pid;
+        // self.current_pid = pid;
         self.processes.push(process);
         self.next_pid += 1;
         Ok(pid)
@@ -444,6 +445,135 @@ impl ProcessManager {
         serial_println!("Current process exited");
 
         self.current_pid = 0; // Reset current PID after exit
+    }
+
+    pub fn get_next_ready_process(&mut self) -> Option<u32> {
+        // Simple round-robin scheduling: find next ready process
+        let current_index = if self.current_pid == 0 {
+            // No current process, start from beginning
+            0
+        } else {
+            // Find current process index and start from next
+            self.processes
+                .iter()
+                .position(|p| p.pid == self.current_pid)
+                .map(|i| (i + 1) % self.processes.len())
+                .unwrap_or(0)
+        };
+
+        // Look for a ready process starting from current_index
+        for i in 0..self.processes.len() {
+            let index = (current_index + i) % self.processes.len();
+            if self.processes[index].state == ProcessState::Ready {
+                return Some(self.processes[index].pid);
+            }
+        }
+        None
+    }
+
+    pub fn context_switch_to(&mut self, pid: u32) {
+        // Mark current process as ready (if it exists and isn't terminated)
+        if self.current_pid != 0 {
+            if let Some(current_process) = self
+                .processes
+                .iter_mut()
+                .find(|p| p.pid == self.current_pid)
+            {
+                if current_process.state == ProcessState::Running {
+                    current_process.state = ProcessState::Ready;
+                }
+            }
+        }
+
+        serial_println!("Preparing to switch context to process {}", pid);
+
+        // Mark new process as running and get its page table info
+        let page_table_frame =
+            if let Some(new_process) = self.processes.iter_mut().find(|p| p.pid == pid) {
+                new_process.state = ProcessState::Running;
+                self.current_pid = pid;
+                serial_println!("Context switching to process {}", pid);
+                new_process.address_space.page_table_frame
+            } else {
+                serial_println!("Process with PID {} not found", pid);
+                return;
+            };
+
+        // Perform the actual context switch
+        self.perform_context_switch(page_table_frame, pid);
+    }
+
+    fn perform_context_switch(
+        &self,
+        page_table_frame: x86_64::structures::paging::PhysFrame,
+        pid: u32,
+    ) {
+        // Get the process to switch to
+        if let Some(process) = self.get_process(pid) {
+            serial_println!("Performing full context switch to process {}", pid);
+
+            // Switch to the process's page table
+            unsafe {
+                asm!("mov cr3, {}", in(reg) page_table_frame.start_address().as_u64());
+            }
+
+            serial_println!("Switched to process {} page table", pid);
+
+            // Now actually switch to user mode and start executing the process
+            self.switch_to_user_mode_direct(process);
+        } else {
+            serial_println!("Process {} not found for context switch", pid);
+        }
+    }
+
+    fn switch_to_user_mode_direct(&self, process: &Process) {
+        serial_println!("Switching to user mode for process {}", process.pid);
+        serial_println!(
+            "Entry point: {:?}, Stack: {:?}",
+            process.instruction_pointer,
+            process.stack_pointer
+        );
+
+        // Get user mode selectors from GDT - these should already have RPL=3
+        let user_code_sel = u64::from(crate::gdt::GDT.1.user_code.0) | 3;
+        let user_data_sel = u64::from(crate::gdt::GDT.1.user_data.0) | 3;
+
+        unsafe {
+            asm!(
+                "
+                // Set up user mode segments
+                mov ax, {user_data_sel_16:x}
+                mov ds, ax
+                mov es, ax
+                mov fs, ax
+                mov gs, ax
+
+                // Push values for IRET (in reverse order)
+                push {user_data_sel}        // SS
+                push {user_stack_ptr}       // RSP
+                push 0x202                  // RFLAGS (interrupts enabled)
+                push {user_code_sel}        // CS
+                push {user_ip}              // RIP
+
+                // Switch to user mode
+                iretq
+                ",
+                user_data_sel_16 = in(reg) (user_data_sel as u16),
+                user_data_sel = in(reg) user_data_sel,
+                user_stack_ptr = in(reg) process.stack_pointer.as_u64(),
+                user_code_sel = in(reg) user_code_sel,
+                user_ip = in(reg) process.instruction_pointer.as_u64(),
+                options(noreturn)
+            );
+        }
+    }
+
+    pub fn get_current_process(&self) -> Option<&Process> {
+        if self.current_pid == 0 {
+            None
+        } else {
+            self.get_process(self.current_pid)
+        }
     }
 }
 
@@ -571,5 +701,96 @@ pub fn switch_to_user_mode(process: &Process, physical_memory_offset: VirtAddr) 
             user_ip = in(reg) process.instruction_pointer.as_u64(),
             options(noreturn)
         );
+    }
+}
+
+// Main scheduling function called by timer interrupt
+pub fn schedule() {
+    // Only schedule if we're not already in a critical section
+    if let Some(mut pm) = PROCESS_MANAGER.try_lock() {
+        if let Some(next_pid) = pm.get_next_ready_process() {
+            // Only switch if it's different from current process
+            if next_pid != pm.current_pid {
+                pm.context_switch_to(next_pid);
+            } else {
+                serial_println!(
+                    "Same process already running, current PID: {}, next PID: {}",
+                    pm.current_pid,
+                    next_pid
+                );
+            }
+        } else {
+            // No ready processes, switch back to kernel
+            if pm.current_pid != 0 {
+                serial_println!("No ready processes, switching back to kernel");
+                unsafe {
+                    asm!("mov cr3, {}", in(reg) pm.kernel_cr3);
+                }
+                pm.current_pid = 0;
+            }
+        }
+    } else {
+        // If we can't get the lock, skip this scheduling round to avoid deadlock
+        serial_println!("Failed to acquire PROCESS_MANAGER lock, skipping scheduling");
+    }
+}
+
+// Function to queue a process without immediately running it
+pub fn queue_example_program(
+    frame_allocator: &mut BootInfoFrameAllocator,
+    physical_memory_offset: VirtAddr,
+) -> Result<u32, ProcessError> {
+    let mut process_manager = PROCESS_MANAGER.lock();
+    let program = include_bytes!("../hello.elf");
+
+    match process_manager.create_process(program, frame_allocator, physical_memory_offset) {
+        Ok(pid) => {
+            serial_println!("Queued process with PID: {}", pid);
+            Ok(pid)
+        }
+        Err(e) => {
+            serial_println!("Failed to queue process: {:?}", e);
+            Err(e)
+        }
+    }
+}
+
+// Function to queue the long-running process
+pub fn queue_long_running_process(
+    frame_allocator: &mut BootInfoFrameAllocator,
+    physical_memory_offset: VirtAddr,
+) -> Result<u32, ProcessError> {
+    let mut process_manager = PROCESS_MANAGER.lock();
+    let program = include_bytes!("../long_running.elf");
+
+    match process_manager.create_process(program, frame_allocator, physical_memory_offset) {
+        Ok(pid) => {
+            serial_println!("Queued long-running process with PID: {}", pid);
+            Ok(pid)
+        }
+        Err(e) => {
+            serial_println!("Failed to queue long-running process: {:?}", e);
+            Err(e)
+        }
+    }
+}
+
+// Function to queue the short-lived process
+pub fn queue_short_lived_process(
+    frame_allocator: &mut BootInfoFrameAllocator,
+    physical_memory_offset: VirtAddr,
+) -> Result<u32, ProcessError> {
+    let mut process_manager = PROCESS_MANAGER.lock();
+    let program = include_bytes!("../short_lived.elf");
+
+    match process_manager.create_process(program, frame_allocator, physical_memory_offset) {
+        Ok(pid) => {
+            serial_println!("Queued short-lived process with PID: {}", pid);
+            Ok(pid)
+        }
+        Err(e) => {
+            serial_println!("Failed to queue short-lived process: {:?}", e);
+            Err(e)
+        }
     }
 }
