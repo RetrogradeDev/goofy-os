@@ -101,16 +101,18 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
 
     serial_println!("Heap initialized successfully!");
 
-    println!("Hello World{}", "!");
+    println!("Hello World{}", "!"); // Load multiple processes to test preemptive multitasking
+    // Load the long-running process
+    // match kernel::process::queue_long_running_process(&mut frame_allocator, phys_mem_offset) {
+    //     Ok(pid) => serial_println!("Successfully queued long-running process with PID: {}", pid),
+    //     Err(e) => serial_println!("Failed to queue long-running process: {:?}", e),
+    // }
 
-    // Queue the example program instead of running it directly
-    // This allows the kernel to continue while the process runs via timer scheduling
-    match kernel::process::queue_example_program(&mut frame_allocator, phys_mem_offset) {
-        Ok(pid) => serial_println!("Successfully queued process with PID: {}", pid),
-        Err(e) => serial_println!("Failed to queue process: {:?}", e),
+    // Load the simple test process
+    match kernel::process::queue_simple_process(&mut frame_allocator, phys_mem_offset) {
+        Ok(pid) => serial_println!("Successfully queued simple process with PID: {}", pid),
+        Err(e) => serial_println!("Failed to queue simple process: {:?}", e),
     }
-
-    // Continue with the rest of kernel initialization - this will now run concurrently with processes
 
     // Some tests for the heap allocator
     let heap_value = alloc::boxed::Box::new(41);
@@ -124,6 +126,14 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     #[cfg(test)]
     test_main();
 
+    // Start the first process - this should trigger preemptive multitasking via timer interrupts
+    serial_println!("Starting first process - timer interrupts will handle switching");
+    kernel::process::start_first_process();
+
+    // This point should never be reached as start_first_process() should switch to user mode
+    serial_println!("ERROR: Returned to kernel after starting first process!");
+
+    // If we somehow get here, start the async executor as a fallback
     let mut executor = Executor::new();
     executor.spawn(Task::new(example_task()));
     executor.spawn(Task::new(kernel::task::keyboard::print_keypresses()));

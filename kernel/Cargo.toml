@@ -19,6 +19,7 @@ lazy_static = { version = "1.5", features = ["spin_no_std"] }
 conquer-once = { version = "0.4.0", default-features = false }
 futures-util = { version = "0.3.31", default-features = false, features = ["alloc"] }
 spinning_top = "0.3.0"
+hashbrown = "0.15.4"
 
 [dependencies.noto-sans-mono-bitmap]
 version = "0.3"
