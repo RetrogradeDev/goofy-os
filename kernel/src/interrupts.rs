@@ -199,8 +199,13 @@ extern "C" fn syscall_handler_rust_debug(rax: u64, rdi: u64, rsi: u64, rdx: u64)
 
     // Check if process exited
     if result == PROCESS_EXITED {
-        serial_println!("Process exited, halting system...");
-        crate::hlt_loop();
+        // If we have another process to run, just return
+        // TODO: Get the next process from the scheduler
+        serial_println!("Process marked for exit, returning to scheduler...");
+
+        loop {
+            crate::process::schedule();
+        }
     }
 
     serial_println!("About to return from syscall...");

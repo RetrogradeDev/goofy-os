@@ -18,7 +18,6 @@ use kernel::{
     memory::BootInfoFrameAllocator,
     println,
     serial_println,
-    task::{Task, executor::Executor},
 };
 
 use bootloader_api::config::{BootloaderConfig, Mapping};
@@ -28,15 +27,6 @@ pub static BOOTLOADER_CONFIG: BootloaderConfig = {
     config.mappings.physical_memory = Some(Mapping::Dynamic);
     config
 };
-
-async fn async_number() -> u32 {
-    42
-}
-
-async fn example_task() {
-    let number = async_number().await;
-    println!("async number: {}", number);
-}
 
 entry_point!(kernel_main, config = &BOOTLOADER_CONFIG);
 
@@ -103,6 +93,31 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
 
     println!("Hello World{}", "!");
 
+    // Initialize the global executor
+    kernel::task::executor::init_global_executor();
+
+    // Create the executor as a kernel process FIRST
+    {
+        use kernel::process::PROCESS_MANAGER;
+        use x86_64::VirtAddr;
+
+        let mut pm = PROCESS_MANAGER.lock();
+        let executor_entry = kernel::task::executor::get_executor_entry_point();
+        let executor_entry_addr = VirtAddr::new(executor_entry as *const () as u64);
+
+        // Use a kernel stack address - we'll just use a static area for simplicity
+        let kernel_stack = VirtAddr::new(0x_4444_4444_0000);
+
+        match pm.create_kernel_process(executor_entry_addr, kernel_stack) {
+            Ok(pid) => {
+                serial_println!("Created executor kernel process with PID: {}", pid);
+            }
+            Err(e) => serial_println!("Failed to create executor kernel process: {:?}", e),
+        }
+
+        // Now release the lock before proceeding to the next step
+    }
+
     // Queue the example program instead of running it directly
     // This allows the kernel to continue while the process runs via timer scheduling
     match kernel::process::queue_example_program(&mut frame_allocator, phys_mem_offset) {
@@ -124,10 +139,19 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     #[cfg(test)]
     test_main();
 
-    let mut executor = Executor::new();
-    executor.spawn(Task::new(example_task()));
-    executor.spawn(Task::new(kernel::task::keyboard::print_keypresses()));
-    executor.run();
+    // Start the first process (should be the executor)
+    {
+        use kernel::process::PROCESS_MANAGER;
+
+        let mut pm = PROCESS_MANAGER.lock();
+        if let Some(next_pid) = pm.get_next_ready_process() {
+            serial_println!("Starting first process with PID: {}", next_pid);
+            pm.context_switch_to(next_pid);
+        }
+    }
+
+    // The kernel should continue running and let the scheduler handle task execution
+    kernel::hlt_loop();
 }
 
 #[cfg(not(test))]

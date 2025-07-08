@@ -107,3 +107,12 @@ fn test_kernel_main(boot_info: &'static mut BootInfo) -> ! {
 fn panic(info: &PanicInfo) -> ! {
     test_panic_handler(info)
 }
+
+async fn async_number() -> u32 {
+    42
+}
+
+pub async fn example_task() {
+    let number = async_number().await;
+    crate::println!("async number: {}", number);
+}

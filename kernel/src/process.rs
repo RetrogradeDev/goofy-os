@@ -21,6 +21,12 @@ pub enum ProcessState {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProcessType {
+    User,
+    Kernel,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProcessError {
     OutOfMemory,
     InvalidProgram,
@@ -33,6 +39,7 @@ pub enum ProcessError {
 pub struct Process {
     pub pid: u32,
     pub state: ProcessState,
+    pub process_type: ProcessType,
     pub address_space: ProcessAddressSpace,
     pub stack_pointer: VirtAddr,
     pub instruction_pointer: VirtAddr,
@@ -355,6 +362,7 @@ impl ProcessManager {
         let process = Process {
             pid: self.next_pid,
             state: ProcessState::Ready,
+            process_type: ProcessType::User,
             address_space,
             stack_pointer,
             instruction_pointer,
@@ -384,6 +392,61 @@ impl ProcessManager {
         // self.current_pid = pid;
         self.processes.push(process);
         self.next_pid += 1;
+        Ok(pid)
+    }
+
+    pub fn create_kernel_process(
+        &mut self,
+        entry_point: VirtAddr,
+        stack_ptr: VirtAddr,
+    ) -> Result<u32, ProcessError> {
+        serial_println!(
+            "Creating kernel process with entry point: {:?}",
+            entry_point
+        );
+
+        // Create a dummy address space for kernel process (it won't be used for page table switching)
+        // For kernel processes, we'll use the kernel's page table frame (stored in kernel_cr3)
+        let kernel_frame = x86_64::structures::paging::PhysFrame::from_start_address(
+            x86_64::PhysAddr::new(self.kernel_cr3 & !0xfff), // Remove flags from CR3
+        )
+        .map_err(|_| ProcessError::OutOfMemory)?;
+
+        let dummy_address_space = crate::memory::ProcessAddressSpace::dummy(kernel_frame);
+
+        let process = Process {
+            pid: self.next_pid,
+            state: ProcessState::Ready,
+            process_type: ProcessType::Kernel,
+            address_space: dummy_address_space,
+            stack_pointer: stack_ptr,
+            instruction_pointer: entry_point,
+            registers: RegisterState {
+                rax: 0,
+                rbx: 0,
+                rcx: 0,
+                rdx: 0,
+                rsi: 0,
+                rdi: 0,
+                rbp: 0,
+                rsp: stack_ptr.as_u64(),
+                r8: 0,
+                r9: 0,
+                r10: 0,
+                r11: 0,
+                r12: 0,
+                r13: 0,
+                r14: 0,
+                r15: 0,
+                rflags: 0x202, // Default RFLAGS with interrupts enabled
+                rip: entry_point.as_u64(),
+            },
+        };
+
+        let pid = self.next_pid;
+        self.processes.push(process);
+        self.next_pid += 1;
+        serial_println!("Created kernel process with PID: {}", pid);
         Ok(pid)
     }
 
@@ -487,20 +550,28 @@ impl ProcessManager {
 
         serial_println!("Preparing to switch context to process {}", pid);
 
-        // Mark new process as running and get its page table info
-        let page_table_frame =
-            if let Some(new_process) = self.processes.iter_mut().find(|p| p.pid == pid) {
-                new_process.state = ProcessState::Running;
-                self.current_pid = pid;
-                serial_println!("Context switching to process {}", pid);
-                new_process.address_space.page_table_frame
-            } else {
-                serial_println!("Process with PID {} not found", pid);
-                return;
-            };
+        // Get the process and check if it's a kernel or user process
+        if let Some(new_process) = self.processes.iter_mut().find(|p| p.pid == pid) {
+            new_process.state = ProcessState::Running;
+            self.current_pid = pid;
 
-        // Perform the actual context switch
-        self.perform_context_switch(page_table_frame, pid);
+            match new_process.process_type {
+                ProcessType::Kernel => {
+                    serial_println!("Context switching to kernel process {}", pid);
+                    let temp_pid = pid; // Store PID since we'll need it after the borrow
+                    // Release the borrow by ending the scope
+                    let _ = new_process;
+                    self.perform_kernel_context_switch(temp_pid);
+                }
+                ProcessType::User => {
+                    serial_println!("Context switching to user process {}", pid);
+                    let page_table_frame = new_process.address_space.page_table_frame;
+                    self.perform_context_switch(page_table_frame, pid);
+                }
+            }
+        } else {
+            serial_println!("Process with PID {} not found", pid);
+        }
     }
 
     fn perform_context_switch(
@@ -566,6 +637,50 @@ impl ProcessManager {
                 options(noreturn)
             );
         }
+    }
+    fn perform_kernel_context_switch(&mut self, pid: u32) {
+        // Get the kernel process to switch to
+        if let Some(process) = self.get_process(pid) {
+            serial_println!("Performing kernel context switch to process {}", pid);
+
+            // For kernel processes, we don't switch page tables, just jump to the entry point
+            // This is essentially a function call within kernel space
+            self.switch_to_kernel_mode_direct(process);
+
+            // After the kernel process function returns, mark it as ready for next scheduling
+            if let Some(process_mut) = self.processes.iter_mut().find(|p| p.pid == pid) {
+                if process_mut.state == ProcessState::Running {
+                    process_mut.state = ProcessState::Ready;
+                }
+            }
+        } else {
+            serial_println!("Kernel process {} not found for context switch", pid);
+        }
+    }
+
+    fn switch_to_kernel_mode_direct(&self, process: &Process) {
+        serial_println!("Switching to kernel process {}", process.pid);
+        serial_println!(
+            "Entry point: {:?}, Stack: {:?}",
+            process.instruction_pointer,
+            process.stack_pointer
+        );
+
+        // For kernel processes, we perform a direct call to the entry point
+        // The process should be designed to yield voluntarily by returning from the function
+        let entry_point: extern "C" fn() =
+            unsafe { core::mem::transmute(process.instruction_pointer.as_ptr::<u8>()) };
+
+        // Call the kernel process entry point
+        entry_point();
+
+        // After the function returns, the process has yielded
+        serial_println!("Kernel process {} yielded", process.pid);
+
+        // Mark the process as ready again so it can be scheduled later
+        // Note: We need to find and update the process state
+        // This is a bit tricky since we're in an immutable borrow context
+        // We'll let the scheduler handle this in the next scheduling round
     }
 
     pub fn get_current_process(&self) -> Option<&Process> {
@@ -756,41 +871,41 @@ pub fn queue_example_program(
 }
 
 // Function to queue the long-running process
-pub fn queue_long_running_process(
-    frame_allocator: &mut BootInfoFrameAllocator,
-    physical_memory_offset: VirtAddr,
-) -> Result<u32, ProcessError> {
-    let mut process_manager = PROCESS_MANAGER.lock();
-    let program = include_bytes!("../long_running.elf");
+// pub fn queue_long_running_process(
+//     frame_allocator: &mut BootInfoFrameAllocator,
+//     physical_memory_offset: VirtAddr,
+// ) -> Result<u32, ProcessError> {
+//     let mut process_manager = PROCESS_MANAGER.lock();
+//     let program = include_bytes!("../long_running.elf");
 
-    match process_manager.create_process(program, frame_allocator, physical_memory_offset) {
-        Ok(pid) => {
-            serial_println!("Queued long-running process with PID: {}", pid);
-            Ok(pid)
-        }
-        Err(e) => {
-            serial_println!("Failed to queue long-running process: {:?}", e);
-            Err(e)
-        }
-    }
-}
+//     match process_manager.create_process(program, frame_allocator, physical_memory_offset) {
+//         Ok(pid) => {
+//             serial_println!("Queued long-running process with PID: {}", pid);
+//             Ok(pid)
+//         }
+//         Err(e) => {
+//             serial_println!("Failed to queue long-running process: {:?}", e);
+//             Err(e)
+//         }
+//     }
+// }
 
-// Function to queue the short-lived process
-pub fn queue_short_lived_process(
-    frame_allocator: &mut BootInfoFrameAllocator,
-    physical_memory_offset: VirtAddr,
-) -> Result<u32, ProcessError> {
-    let mut process_manager = PROCESS_MANAGER.lock();
-    let program = include_bytes!("../short_lived.elf");
+// // Function to queue the short-lived process
+// pub fn queue_short_lived_process(
+//     frame_allocator: &mut BootInfoFrameAllocator,
+//     physical_memory_offset: VirtAddr,
+// ) -> Result<u32, ProcessError> {
+//     let mut process_manager = PROCESS_MANAGER.lock();
+//     let program = include_bytes!("../short_lived.elf");
 
-    match process_manager.create_process(program, frame_allocator, physical_memory_offset) {
-        Ok(pid) => {
-            serial_println!("Queued short-lived process with PID: {}", pid);
-            Ok(pid)
-        }
-        Err(e) => {
-            serial_println!("Failed to queue short-lived process: {:?}", e);
-            Err(e)
-        }
-    }
-}
+//     match process_manager.create_process(program, frame_allocator, physical_memory_offset) {
+//         Ok(pid) => {
+//             serial_println!("Queued short-lived process with PID: {}", pid);
+//             Ok(pid)
+//         }
+//         Err(e) => {
+//             serial_println!("Failed to queue short-lived process: {:?}", e);
+//             Err(e)
+//         }
+//     }
+// }

@@ -225,4 +225,13 @@ impl ProcessAddressSpace {
             self.page_table_frame.start_address()
         );
     }
+
+    /// Create a dummy ProcessAddressSpace for kernel processes
+    /// Kernel processes don't need their own page tables
+    pub fn dummy(page_table_frame: PhysFrame<Size4KiB>) -> Self {
+        ProcessAddressSpace {
+            page_table_frame,
+            physical_memory_offset: VirtAddr::new(0), // Not used for kernel processes
+        }
+    }
 }
