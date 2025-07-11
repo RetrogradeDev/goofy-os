@@ -126,24 +126,23 @@ extern "x86-interrupt" fn timer_handler(_stack_frame: InterruptStackFrame) {
 
     // Implement preemptive scheduling
     // Check if we should schedule a different process
-    if let Some(mut pm) = crate::process::PROCESS_MANAGER.try_lock() {
-        if pm.has_running_processes() {
-            let current_pid = pm.get_current_pid();
-            let next_pid = pm.get_next_ready_process();
+    let mut pm = crate::process::PROCESS_MANAGER.lock();
+    if pm.has_running_processes() {
+        let current_pid = pm.get_current_pid();
+        let next_pid = pm.get_next_ready_process();
 
-            // If we have a next process and it's different from current, schedule it
-            if let Some(next) = next_pid {
-                if next != current_pid {
-                    drop(pm);
-                    // Call scheduler to switch to the next process
-                    crate::process::schedule();
-                }
-            } else if current_pid != 0 {
-                // No ready processes, but we're not in kernel mode
-                // Switch back to kernel idle
+        // If we have a next process and it's different from current, schedule it
+        if let Some(next) = next_pid {
+            if next != current_pid {
                 drop(pm);
+                // Call scheduler to switch to the next process
                 crate::process::schedule();
             }
+        } else if current_pid != 0 {
+            // No ready processes, but we're not in kernel mode
+            // Switch back to kernel idle
+            drop(pm);
+            crate::process::schedule();
         }
     }
 }
@@ -227,9 +226,16 @@ extern "C" fn syscall_handler_rust_debug(rax: u64, rdi: u64, rsi: u64, rdx: u64)
 
         crate::process::kill_current_process(rdi as u8);
 
+        // Spin loop
+        // for _ in 0..1_000_000_000 {
+        //     unsafe { asm!("nop") };
+        // }
+
         serial_println!("Process marked for exit, returning to scheduler...");
 
         enable(); // Just to be sure
+
+        //hlt();
 
         crate::process::schedule();
     }
