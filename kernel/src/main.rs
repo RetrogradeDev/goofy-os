@@ -18,25 +18,16 @@ use kernel::{
     memory::BootInfoFrameAllocator,
     println,
     serial_println,
-    task::{Task, executor::Executor},
 };
 
 use bootloader_api::config::{BootloaderConfig, Mapping};
+use x86_64::instructions::interrupts;
 
 pub static BOOTLOADER_CONFIG: BootloaderConfig = {
     let mut config = BootloaderConfig::new_default();
     config.mappings.physical_memory = Some(Mapping::Dynamic);
     config
 };
-
-async fn async_number() -> u32 {
-    42
-}
-
-async fn example_task() {
-    let number = async_number().await;
-    println!("async number: {}", number);
-}
 
 entry_point!(kernel_main, config = &BOOTLOADER_CONFIG);
 
@@ -101,15 +92,45 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
 
     serial_println!("Heap initialized successfully!");
 
-    println!("Hello World{}", "!"); // Load multiple processes to test preemptive multitasking
-    // Load the long-running process
-    // match kernel::process::queue_long_running_process(&mut frame_allocator, phys_mem_offset) {
-    //     Ok(pid) => serial_println!("Successfully queued long-running process with PID: {}", pid),
-    //     Err(e) => serial_println!("Failed to queue long-running process: {:?}", e),
-    // }
+    println!("Hello World{}", "!");
+
+    // Initialize the global executor
+    kernel::task::executor::init_global_executor();
+
+    // Create the executor as a kernel process FIRST
+    {
+        use kernel::process::PROCESS_MANAGER;
+        use x86_64::VirtAddr;
+
+        let mut pm = PROCESS_MANAGER.lock();
+        let executor_entry = kernel::task::executor::get_executor_entry_point();
+        let executor_entry_addr = VirtAddr::new(executor_entry as *const () as u64);
+
+        // Allocate a proper kernel stack
+        const KERNEL_STACK_SIZE: usize = 4096 * 4; // 16KB stack
+        static mut KERNEL_STACK: [u8; KERNEL_STACK_SIZE] = [0; KERNEL_STACK_SIZE];
+
+        let kernel_stack = VirtAddr::from_ptr(&raw const KERNEL_STACK) + KERNEL_STACK_SIZE as u64;
+
+        match pm.create_kernel_process(executor_entry_addr, kernel_stack) {
+            Ok(pid) => {
+                serial_println!("Created executor kernel process with PID: {}", pid);
+            }
+            Err(e) => serial_println!("Failed to create executor kernel process: {:?}", e),
+        }
+
+        // Now release the lock before proceeding to the next step
+    }
+
+    // Queue the example program instead of running it directly
+    // This allows the kernel to continue while the process runs via timer scheduling
+    match kernel::process::queue_example_program(&mut frame_allocator, phys_mem_offset) {
+        Ok(pid) => serial_println!("Successfully queued process with PID: {}", pid),
+        Err(e) => serial_println!("Failed to queue process: {:?}", e),
+    }
 
     // Load the simple test process
-    match kernel::process::queue_simple_process(&mut frame_allocator, phys_mem_offset) {
+    match kernel::process::queue_example_program(&mut frame_allocator, phys_mem_offset) {
         Ok(pid) => serial_println!("Successfully queued simple process with PID: {}", pid),
         Err(e) => serial_println!("Failed to queue simple process: {:?}", e),
     }
@@ -126,18 +147,18 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     #[cfg(test)]
     test_main();
 
-    // Start the first process - this should trigger preemptive multitasking via timer interrupts
-    serial_println!("Starting first process - timer interrupts will handle switching");
-    kernel::process::start_first_process();
+    {
+        use kernel::process::PROCESS_MANAGER;
 
-    // This point should never be reached as start_first_process() should switch to user mode
-    serial_println!("ERROR: Returned to kernel after starting first process!");
+        let mut pm = PROCESS_MANAGER.lock();
+        let pid = 1;
 
-    // If we somehow get here, start the async executor as a fallback
-    let mut executor = Executor::new();
-    executor.spawn(Task::new(example_task()));
-    executor.spawn(Task::new(kernel::task::keyboard::print_keypresses()));
-    executor.run();
+        pm.set_current_pid(pid);
+    }
+
+    // The kernel should continue running and let the scheduler handle task execution
+    interrupts::enable();
+    kernel::hlt_loop();
 }
 
 #[cfg(not(test))]

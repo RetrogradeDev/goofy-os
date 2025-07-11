@@ -1,17 +1,16 @@
 use core::arch::asm;
 
 use alloc::vec::Vec;
-use hashbrown::HashMap;
 use lazy_static::lazy_static;
 use spin::Mutex;
 use x86_64::{
     VirtAddr,
-    structures::paging::{FrameAllocator, PageTableFlags, mapper::MapToError},
+    structures::paging::{FrameAllocator, PageTableFlags},
 };
 
 use crate::{
     memory::{BootInfoFrameAllocator, ProcessAddressSpace},
-    serial, serial_println,
+    serial_println,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -19,6 +18,12 @@ pub enum ProcessState {
     Ready,
     Running,
     Terminated,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProcessType {
+    User,
+    Kernel,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -34,6 +39,7 @@ pub enum ProcessError {
 pub struct Process {
     pub pid: u32,
     pub state: ProcessState,
+    pub process_type: ProcessType,
     pub address_space: ProcessAddressSpace,
     pub stack_pointer: VirtAddr,
     pub instruction_pointer: VirtAddr,
@@ -131,22 +137,9 @@ impl ProcessManager {
             ProcessError::OutOfMemory
         })?;
 
-        // Map stack at different addresses for different processes to avoid conflicts
-        // Process 1: 0x800000, Process 2: 0x900000, etc.
-        // TODO: Use different table/page for each process?
-        let stack_base_addr = 0x800000 + ((self.next_pid - 1) as u64 * 0x100000);
-        let stack_virtual_addr = VirtAddr::new(stack_base_addr);
-        serial_println!(
-            "Mapping stack for process {} at {:?}",
-            self.next_pid,
-            stack_virtual_addr
-        );
-        let stack_virtual_addr = VirtAddr::new(stack_base_addr);
-        serial_println!(
-            "Mapping stack for process {} at {:?}",
-            self.next_pid,
-            stack_virtual_addr
-        );
+        // Map stack at 0x800000 (8MB mark)
+        serial_println!("Mapping stack...");
+        let stack_virtual_addr = VirtAddr::new(0x800000);
         address_space
             .map_user_memory(
                 stack_virtual_addr,
@@ -164,70 +157,7 @@ impl ProcessManager {
             })?;
 
         // Copy program data to the mapped memory through virtual memory
-        // Add an offset for each process to avoid virtual address conflicts
-        let process_vaddr_offset = (self.next_pid - 1) as u64 * 0x10000000; // 256MB offset per process
-
-        // Pre-process segments to determine combined permissions for each page
-        let mut page_permissions: HashMap<u64, PageTableFlags> = HashMap::new();
-
-        for (i, ph) in elf.program_headers.iter().enumerate() {
-            if ph.p_type != goblin::elf::program_header::PT_LOAD {
-                continue;
-            }
-
-            let mem_start = ph.p_vaddr + process_vaddr_offset;
-            let segment_virtual_addr = VirtAddr::new(mem_start & !0xfff);
-            let segment_end_addr = mem_start + ph.p_memsz;
-            let aligned_size = (segment_end_addr + 4095) & !0xfff - (mem_start & !0xfff);
-            let pages_needed = aligned_size / 4096;
-
-            // Set appropriate flags based on ELF segment permissions
-            let mut segment_flags = PageTableFlags::PRESENT | PageTableFlags::USER_ACCESSIBLE;
-            if ph.p_flags & goblin::elf::program_header::PF_W != 0 {
-                segment_flags |= PageTableFlags::WRITABLE;
-            }
-            if (ph.p_flags & goblin::elf::program_header::PF_X) == 0 {
-                segment_flags |= PageTableFlags::NO_EXECUTE;
-            }
-
-            // Accumulate permissions for each page
-            for page_idx in 0..pages_needed {
-                let page_virtual_addr = segment_virtual_addr + (page_idx * 4096);
-                let page_addr = page_virtual_addr.as_u64();
-
-                if let Some(existing_flags) = page_permissions.get(&page_addr) {
-                    // Merge permissions - be more permissive
-                    let mut merged_flags = *existing_flags;
-                    if segment_flags.contains(PageTableFlags::WRITABLE) {
-                        merged_flags |= PageTableFlags::WRITABLE;
-                    }
-                    if !segment_flags.contains(PageTableFlags::NO_EXECUTE) {
-                        merged_flags &= !PageTableFlags::NO_EXECUTE;
-                    }
-                    page_permissions.insert(page_addr, merged_flags);
-                    serial_println!(
-                        "Merged permissions for page {:?}: {:?}",
-                        page_virtual_addr,
-                        merged_flags
-                    );
-                } else {
-                    page_permissions.insert(page_addr, segment_flags);
-                    serial_println!(
-                        "Initial permissions for page {:?}: {:?}",
-                        page_virtual_addr,
-                        segment_flags
-                    );
-                }
-            }
-        }
-
-        // Copy program data to the mapped memory through virtual memory
-        // Add an offset for each process to avoid virtual address conflicts
-        serial_println!(
-            "Loading ELF segments with offset 0x{:x} for process {}...",
-            process_vaddr_offset,
-            self.next_pid
-        );
+        serial_println!("Loading ELF segments...");
         for (i, ph) in elf.program_headers.iter().enumerate() {
             if ph.p_type != goblin::elf::program_header::PT_LOAD {
                 serial_println!("Skipping non-loadable segment {}", i);
@@ -241,7 +171,7 @@ impl ProcessManager {
                 ph.p_filesz
             );
 
-            let mem_start = ph.p_vaddr + process_vaddr_offset;
+            let mem_start = ph.p_vaddr;
             let file_start = ph.p_offset as usize;
             let file_end = file_start + ph.p_filesz as usize;
 
@@ -270,21 +200,27 @@ impl ProcessManager {
                 segment_virtual_addr
             );
 
-            // Map each page for this segment using pre-calculated permissions
+            // Set appropriate flags based on ELF segment permissions
+            let mut segment_flags = PageTableFlags::PRESENT | PageTableFlags::USER_ACCESSIBLE;
+            if ph.p_flags & goblin::elf::program_header::PF_W != 0 {
+                segment_flags |= PageTableFlags::WRITABLE;
+            }
+            if (ph.p_flags & goblin::elf::program_header::PF_X) == 0 {
+                segment_flags |= PageTableFlags::NO_EXECUTE;
+            }
+
+            serial_println!(
+                "Segment {} ELF flags: readable={}, writable={}, executable={}",
+                i,
+                (ph.p_flags & goblin::elf::program_header::PF_R) != 0,
+                (ph.p_flags & goblin::elf::program_header::PF_W) != 0,
+                (ph.p_flags & goblin::elf::program_header::PF_X) != 0
+            );
+            serial_println!("Segment {} page flags: {:?}", i, segment_flags);
+
+            // Map each page for this segment
             for page_idx in 0..pages_needed {
                 let page_virtual_addr = segment_virtual_addr + (page_idx * 4096);
-
-                // Get the pre-calculated permissions for this page
-                let segment_flags = page_permissions
-                    .get(&page_virtual_addr.as_u64())
-                    .copied()
-                    .unwrap_or(PageTableFlags::PRESENT | PageTableFlags::USER_ACCESSIBLE);
-
-                serial_println!(
-                    "Using final permissions for page {:?}: {:?}",
-                    page_virtual_addr,
-                    segment_flags
-                );
 
                 // Allocate frame for this page
                 let page_frame = frame_allocator.allocate_frame().ok_or_else(|| {
@@ -303,211 +239,108 @@ impl ProcessManager {
                     page_virtual_addr
                 );
 
-                // Try to map the page - if it fails because it's already mapped, skip this segment
-                match address_space.map_user_memory(
-                    page_virtual_addr,
-                    page_frame.start_address(),
-                    4096,
-                    segment_flags,
-                    frame_allocator,
-                ) {
-                    Ok(_) => {
-                        serial_println!("Successfully mapped page {} of segment {}", page_idx, i);
+                address_space
+                    .map_user_memory(
+                        page_virtual_addr,
+                        page_frame.start_address(),
+                        4096,
+                        segment_flags,
+                        frame_allocator,
+                    )
+                    .map_err(|e| {
+                        serial_println!("Failed to map segment {} page {}: {:?}", i, page_idx, e);
+                        ProcessError::OutOfMemory
+                    })?;
 
-                        // Copy segment data to this page if needed
-                        let page_offset = page_idx * 4096;
-                        let page_start_addr = segment_virtual_addr.as_u64() + page_offset;
-                        let original_segment_start = mem_start;
-                        let original_segment_end = original_segment_start + ph.p_filesz;
+                // Copy segment data to this page if needed
+                let page_offset = page_idx * 4096;
+                let page_start_addr = segment_virtual_addr.as_u64() + page_offset;
+                let original_segment_start = mem_start;
+                let original_segment_end = original_segment_start + ph.p_filesz;
 
-                        // Calculate what part of this page should contain data
-                        let data_start_in_page = if page_start_addr < original_segment_start {
-                            (original_segment_start - page_start_addr) as usize
-                        } else {
-                            0
-                        };
+                // Calculate what part of this page should contain data
+                let data_start_in_page = if page_start_addr < original_segment_start {
+                    (original_segment_start - page_start_addr) as usize
+                } else {
+                    0
+                };
 
-                        let data_end_in_page = if page_start_addr + 4096 > original_segment_end {
-                            if original_segment_end > page_start_addr {
-                                (original_segment_end - page_start_addr) as usize
-                            } else {
-                                0
-                            }
-                        } else {
-                            4096
-                        };
+                let data_end_in_page = if page_start_addr + 4096 > original_segment_end {
+                    if original_segment_end > page_start_addr {
+                        (original_segment_end - page_start_addr) as usize
+                    } else {
+                        0
+                    }
+                } else {
+                    4096
+                };
 
-                        if data_start_in_page < data_end_in_page {
-                            let page_virtual_ptr = (physical_memory_offset
-                                + page_frame.start_address().as_u64())
-                            .as_mut_ptr::<u8>();
+                if data_start_in_page < data_end_in_page {
+                    let page_virtual_ptr = (physical_memory_offset
+                        + page_frame.start_address().as_u64())
+                    .as_mut_ptr::<u8>();
 
-                            // Calculate offset in the source data
-                            let src_offset = if page_start_addr >= original_segment_start {
-                                (page_start_addr - original_segment_start) as usize
-                            } else {
-                                0
-                            };
+                    // Calculate offset in the source data
+                    let src_offset = if page_start_addr >= original_segment_start {
+                        (page_start_addr - original_segment_start) as usize
+                    } else {
+                        0
+                    };
 
-                            let copy_size = data_end_in_page - data_start_in_page;
+                    let copy_size = data_end_in_page - data_start_in_page;
 
-                            if src_offset < segment_data.len() && copy_size > 0 {
-                                let actual_copy_size =
-                                    core::cmp::min(copy_size, segment_data.len() - src_offset);
-                                let data_to_copy =
-                                    &segment_data[src_offset..src_offset + actual_copy_size];
+                    if src_offset < segment_data.len() && copy_size > 0 {
+                        let actual_copy_size =
+                            core::cmp::min(copy_size, segment_data.len() - src_offset);
+                        let data_to_copy = &segment_data[src_offset..src_offset + actual_copy_size];
 
-                                unsafe {
-                                    // Zero out the entire page first
-                                    core::ptr::write_bytes(page_virtual_ptr, 0, 4096);
+                        unsafe {
+                            // Zero out the entire page first
+                            core::ptr::write_bytes(page_virtual_ptr, 0, 4096);
 
-                                    // Copy the actual data for this page
-                                    core::ptr::copy_nonoverlapping(
-                                        data_to_copy.as_ptr(),
-                                        page_virtual_ptr.add(data_start_in_page),
-                                        data_to_copy.len(),
-                                    );
-                                }
-
-                                serial_println!(
-                                    "Copied {} bytes to page {} of segment {} (src_offset: {}, page_offset: {})",
-                                    data_to_copy.len(),
-                                    page_idx,
-                                    i,
-                                    src_offset,
-                                    data_start_in_page
-                                );
-                            } else {
-                                // Zero the page if no data to copy
-                                let page_virtual_ptr = (physical_memory_offset
-                                    + page_frame.start_address().as_u64())
-                                .as_mut_ptr::<u8>();
-                                unsafe {
-                                    core::ptr::write_bytes(page_virtual_ptr, 0, 4096);
-                                }
-                                serial_println!(
-                                    "Zeroed page {} of segment {} (no data to copy)",
-                                    page_idx,
-                                    i
-                                );
-                            }
-                        } else {
-                            // This page is beyond the file data, just zero it
-                            let page_virtual_ptr = (physical_memory_offset
-                                + page_frame.start_address().as_u64())
-                            .as_mut_ptr::<u8>();
-                            unsafe {
-                                core::ptr::write_bytes(page_virtual_ptr, 0, 4096);
-                            }
-                            serial_println!(
-                                "Zeroed page {} of segment {} (beyond file data)",
-                                page_idx,
-                                i
+                            // Copy the actual data for this page
+                            core::ptr::copy_nonoverlapping(
+                                data_to_copy.as_ptr(),
+                                page_virtual_ptr.add(data_start_in_page),
+                                data_to_copy.len(),
                             );
                         }
-                    }
-                    Err(MapToError::PageAlreadyMapped(existing_frame)) => {
+
                         serial_println!(
-                            "Page {} of segment {} already mapped, updating permissions and copying data",
+                            "Copied {} bytes to page {} of segment {} (src_offset: {}, page_offset: {})",
+                            data_to_copy.len(),
+                            page_idx,
+                            i,
+                            src_offset,
+                            data_start_in_page
+                        );
+                    } else {
+                        // Zero the page if no data to copy
+                        let page_virtual_ptr = (physical_memory_offset
+                            + page_frame.start_address().as_u64())
+                        .as_mut_ptr::<u8>();
+                        unsafe {
+                            core::ptr::write_bytes(page_virtual_ptr, 0, 4096);
+                        }
+                        serial_println!(
+                            "Zeroed page {} of segment {} (no data to copy)",
                             page_idx,
                             i
                         );
-
-                        // Get the currently mapped frame (should be the same as existing_frame)
-                        // Update the page table entry to merge permissions
-                        // We need to get more permissive flags (if this segment needs execute, enable it)
-                        let current_flags =
-                            PageTableFlags::PRESENT | PageTableFlags::USER_ACCESSIBLE;
-                        let mut new_flags = current_flags;
-
-                        // If the new segment needs to be writable, make it writable
-                        if segment_flags.contains(PageTableFlags::WRITABLE) {
-                            new_flags |= PageTableFlags::WRITABLE;
-                        }
-
-                        // If the new segment should be executable (doesn't have NO_EXECUTE), make it executable
-                        if !segment_flags.contains(PageTableFlags::NO_EXECUTE) {
-                            // Remove NO_EXECUTE flag to make page executable
-                            new_flags &= !PageTableFlags::NO_EXECUTE;
-                            serial_println!("Making page {} of segment {} executable", page_idx, i);
-                        } else {
-                            new_flags |= PageTableFlags::NO_EXECUTE;
-                        }
-
-                        serial_println!("Updating page permissions to: {:?}", new_flags);
-
-                        // Re-map the page with the new permissions
-                        // We need to unmap and remap to change permissions
-                        // For now, let's just continue and copy the data
-
-                        // Copy segment data to the existing page
-                        let page_offset = page_idx * 4096;
-                        let page_start_addr = segment_virtual_addr.as_u64() + page_offset;
-                        let original_segment_start = mem_start;
-                        let original_segment_end = original_segment_start + ph.p_filesz;
-
-                        // Calculate what part of this page should contain data
-                        let data_start_in_page = if page_start_addr < original_segment_start {
-                            (original_segment_start - page_start_addr) as usize
-                        } else {
-                            0
-                        };
-
-                        let data_end_in_page = if page_start_addr + 4096 > original_segment_end {
-                            if original_segment_end > page_start_addr {
-                                (original_segment_end - page_start_addr) as usize
-                            } else {
-                                0
-                            }
-                        } else {
-                            4096
-                        };
-
-                        if data_start_in_page < data_end_in_page {
-                            // Use the existing frame to copy data
-                            let page_virtual_ptr = (physical_memory_offset
-                                + existing_frame.start_address().as_u64())
-                            .as_mut_ptr::<u8>();
-
-                            // Calculate offset in the source data
-                            let src_offset = if page_start_addr >= original_segment_start {
-                                (page_start_addr - original_segment_start) as usize
-                            } else {
-                                0
-                            };
-
-                            let copy_size = data_end_in_page - data_start_in_page;
-
-                            if src_offset < segment_data.len() && copy_size > 0 {
-                                let actual_copy_size =
-                                    core::cmp::min(copy_size, segment_data.len() - src_offset);
-                                let data_to_copy =
-                                    &segment_data[src_offset..src_offset + actual_copy_size];
-
-                                unsafe {
-                                    // Copy the data for this segment (overlay on existing data)
-                                    core::ptr::copy_nonoverlapping(
-                                        data_to_copy.as_ptr(),
-                                        page_virtual_ptr.add(data_start_in_page),
-                                        data_to_copy.len(),
-                                    );
-                                }
-
-                                serial_println!(
-                                    "Copied {} bytes to existing page {} of segment {} (src_offset: {}, page_offset: {})",
-                                    data_to_copy.len(),
-                                    page_idx,
-                                    i,
-                                    src_offset,
-                                    data_start_in_page
-                                );
-                            }
-                        }
                     }
-                    Err(e) => {
-                        serial_println!("Failed to map segment {} page {}: {:?}", i, page_idx, e);
-                        return Err(ProcessError::OutOfMemory);
+                } else {
+                    // This page is beyond the file data, just zero it
+                    let page_virtual_ptr = (physical_memory_offset
+                        + page_frame.start_address().as_u64())
+                    .as_mut_ptr::<u8>();
+                    unsafe {
+                        core::ptr::write_bytes(page_virtual_ptr, 0, 4096);
                     }
+                    serial_println!(
+                        "Zeroed page {} of segment {} (beyond file data)",
+                        page_idx,
+                        i
+                    );
                 }
             }
 
@@ -520,7 +353,7 @@ impl ProcessManager {
         }
 
         let stack_pointer = stack_virtual_addr + 0x1000 - 8; // Stack grows downward, point to top of stack minus 8 bytes for alignment
-        let instruction_pointer = VirtAddr::new(elf.entry + process_vaddr_offset); // Start at ELF entry point with offset
+        let instruction_pointer = VirtAddr::new(elf.entry); // Start at ELF entry point
 
         serial_println!("Setting up process with PID {}", self.next_pid);
         serial_println!("Stack pointer will be at: {:?}", stack_pointer);
@@ -529,6 +362,7 @@ impl ProcessManager {
         let process = Process {
             pid: self.next_pid,
             state: ProcessState::Ready,
+            process_type: ProcessType::User,
             address_space,
             stack_pointer,
             instruction_pointer,
@@ -558,6 +392,61 @@ impl ProcessManager {
         // self.current_pid = pid;
         self.processes.push(process);
         self.next_pid += 1;
+        Ok(pid)
+    }
+
+    pub fn create_kernel_process(
+        &mut self,
+        entry_point: VirtAddr,
+        stack_ptr: VirtAddr,
+    ) -> Result<u32, ProcessError> {
+        serial_println!(
+            "Creating kernel process with entry point: {:?}",
+            entry_point
+        );
+
+        // Create a dummy address space for kernel process (it won't be used for page table switching)
+        // For kernel processes, we'll use the kernel's page table frame (stored in kernel_cr3)
+        let kernel_frame = x86_64::structures::paging::PhysFrame::from_start_address(
+            x86_64::PhysAddr::new(self.kernel_cr3 & !0xfff), // Remove flags from CR3
+        )
+        .map_err(|_| ProcessError::OutOfMemory)?;
+
+        let dummy_address_space = crate::memory::ProcessAddressSpace::dummy(kernel_frame);
+
+        let process = Process {
+            pid: self.next_pid,
+            state: ProcessState::Ready,
+            process_type: ProcessType::Kernel,
+            address_space: dummy_address_space,
+            stack_pointer: stack_ptr,
+            instruction_pointer: entry_point,
+            registers: RegisterState {
+                rax: 0,
+                rbx: 0,
+                rcx: 0,
+                rdx: 0,
+                rsi: 0,
+                rdi: 0,
+                rbp: 0,
+                rsp: stack_ptr.as_u64(),
+                r8: 0,
+                r9: 0,
+                r10: 0,
+                r11: 0,
+                r12: 0,
+                r13: 0,
+                r14: 0,
+                r15: 0,
+                rflags: 0x202, // Default RFLAGS with interrupts enabled
+                rip: entry_point.as_u64(),
+            },
+        };
+
+        let pid = self.next_pid;
+        self.processes.push(process);
+        self.next_pid += 1;
+        serial_println!("Created kernel process with PID: {}", pid);
         Ok(pid)
     }
 
@@ -597,8 +486,20 @@ impl ProcessManager {
         }
     }
 
+    pub fn set_current_pid(&mut self, pid: u32) {
+        self.current_pid = pid;
+    }
+
+    pub fn get_current_pid(&self) -> u32 {
+        self.current_pid
+    }
+
     pub fn get_process(&self, pid: u32) -> Option<&Process> {
         self.processes.iter().find(|p| p.pid == pid)
+    }
+
+    pub fn get_process_mut(&mut self, pid: u32) -> Option<&mut Process> {
+        self.processes.iter_mut().find(|p| p.pid == pid)
     }
 
     pub fn exit_current_process(&mut self, exit_code: u8) {
@@ -645,189 +546,11 @@ impl ProcessManager {
         None
     }
 
-    pub fn context_switch_to(&mut self, pid: u32) {
-        // Mark current process as ready (if it exists and isn't terminated)
-        if self.current_pid != 0 {
-            if let Some(current_process) = self
-                .processes
-                .iter_mut()
-                .find(|p| p.pid == self.current_pid)
-            {
-                if current_process.state == ProcessState::Running {
-                    current_process.state = ProcessState::Ready;
-                }
-            }
-        }
-
-        serial_println!("Preparing to switch context to process {}", pid);
-
-        // Mark new process as running and get its page table info
-        let page_table_frame =
-            if let Some(new_process) = self.processes.iter_mut().find(|p| p.pid == pid) {
-                new_process.state = ProcessState::Running;
-                self.current_pid = pid;
-                serial_println!("Context switching to process {}", pid);
-                new_process.address_space.page_table_frame
-            } else {
-                serial_println!("Process with PID {} not found", pid);
-                return;
-            };
-
-        // Perform the actual context switch
-        self.perform_context_switch(page_table_frame, pid);
-    }
-
-    fn perform_context_switch(
-        &self,
-        page_table_frame: x86_64::structures::paging::PhysFrame,
-        pid: u32,
-    ) {
-        // Get the process to switch to
-        if let Some(process) = self.get_process(pid) {
-            serial_println!("Performing full context switch to process {}", pid);
-
-            // Switch to the process's page table
-            unsafe {
-                asm!("mov cr3, {}", in(reg) page_table_frame.start_address().as_u64());
-            }
-
-            serial_println!("Switched to process {} page table", pid);
-
-            // Now actually switch to user mode and start executing the process
-            self.switch_to_user_mode_direct(process);
-        } else {
-            serial_println!("Process {} not found for context switch", pid);
-        }
-    }
-
-    fn switch_to_user_mode_direct(&self, process: &Process) {
-        serial_println!("Switching to user mode for process {}", process.pid);
-        serial_println!(
-            "Entry point: {:?}, Stack: {:?}",
-            process.instruction_pointer,
-            process.stack_pointer
-        );
-
-        // Get user mode selectors from GDT - these should already have RPL=3
-        let user_code_sel = u64::from(crate::gdt::GDT.1.user_code.0) | 3;
-        let user_data_sel = u64::from(crate::gdt::GDT.1.user_data.0) | 3;
-
-        serial_println!(
-            "User code selector: 0x{:x}, User data selector: 0x{:x}",
-            user_code_sel,
-            user_data_sel
-        );
-
-        unsafe {
-            // Set up user mode segments first
-            asm!(
-                "
-                mov ax, {user_data_sel_16:x}
-                mov ds, ax
-                mov es, ax
-                mov fs, ax
-                mov gs, ax
-                ",
-                user_data_sel_16 = in(reg) (user_data_sel as u16),
-            );
-
-            serial_println!("User mode segments set up");
-
-            // Use a simpler approach - directly set up the IRET stack frame
-            // without trying to restore all general purpose registers yet
-            serial_println!(
-                "Performing IRET to user mode: RIP=0x{:x}, RSP=0x{:x}, RFLAGS=0x{:x}",
-                process.instruction_pointer.as_u64(),
-                process.stack_pointer.as_u64(),
-                0x202u64
-            );
-
-            asm!(
-                "
-                // Push IRET stack frame (in reverse order)
-                push {user_data_sel}        // SS
-                push {user_stack_ptr}       // RSP
-                push 0x202                  // RFLAGS (interrupts enabled)
-                push {user_code_sel}        // CS
-                push {user_ip}              // RIP
-                
-                // Clear all general purpose registers for clean state
-                xor rax, rax
-                xor rbx, rbx
-                xor rcx, rcx
-                xor rdx, rdx
-                xor rsi, rsi
-                xor rdi, rdi
-                xor rbp, rbp
-                xor r8, r8
-                xor r9, r9
-                xor r10, r10
-                xor r11, r11
-                xor r12, r12
-                xor r13, r13
-                xor r14, r14
-                xor r15, r15
-
-                // Jump to user mode
-                iretq
-                ",
-                user_data_sel = in(reg) user_data_sel,
-                user_stack_ptr = in(reg) process.stack_pointer.as_u64(),
-                user_code_sel = in(reg) user_code_sel,
-                user_ip = in(reg) process.instruction_pointer.as_u64(),
-                options(noreturn)
-            );
-        }
-    }
-
     pub fn get_current_process(&self) -> Option<&Process> {
         if self.current_pid == 0 {
             None
         } else {
             self.get_process(self.current_pid)
-        }
-    }
-
-    /// Marks the current process as terminated
-    pub fn mark_current_process_terminated(&mut self) {
-        if self.current_pid != 0 {
-            if let Some(current_process) = self
-                .processes
-                .iter_mut()
-                .find(|p| p.pid == self.current_pid)
-            {
-                current_process.state = ProcessState::Terminated;
-                serial_println!("Process {} marked as terminated", self.current_pid);
-            }
-        }
-    }
-
-    /// Cleans up terminated processes and frees their resources
-    pub fn cleanup_terminated_processes(&mut self) {
-        let initial_count = self.processes.len();
-
-        // Find terminated processes and clean them up
-        let mut i = 0;
-        while i < self.processes.len() {
-            if self.processes[i].state == ProcessState::Terminated {
-                let mut terminated_process = self.processes.remove(i);
-                serial_println!("Cleaning up terminated process {}", terminated_process.pid);
-
-                // Clean up the process resources
-                terminated_process.cleanup_resources();
-
-                // If this was the current process, reset current_pid
-                if self.current_pid == terminated_process.pid {
-                    self.current_pid = 0;
-                }
-            } else {
-                i += 1;
-            }
-        }
-
-        let cleaned_count = initial_count - self.processes.len();
-        if cleaned_count > 0 {
-            serial_println!("Cleaned up {} terminated processes", cleaned_count);
         }
     }
 }
@@ -836,100 +559,145 @@ lazy_static! {
     pub static ref PROCESS_MANAGER: Mutex<ProcessManager> = Mutex::new(ProcessManager::new());
 }
 
-pub fn switch_to_user_mode(process: &Process, physical_memory_offset: VirtAddr) {
+// Main scheduling function called by timer interrupt
+pub fn schedule() -> ! {
+    // Only schedule if we're not already in a critical section
+    if let Some(mut pm) = PROCESS_MANAGER.try_lock() {
+        if let Some(next_pid) = pm.get_next_ready_process() {
+            // Only switch if it's different from current process
+            let mut process = pm.get_process(next_pid).unwrap().clone();
+            pm.current_pid = next_pid;
+
+            drop(pm);
+
+            context_switch_to(&mut process);
+        } else {
+            // No ready processes, switch back to kernel
+            if pm.current_pid != 0 {
+                serial_println!("No ready processes, switching back to kernel");
+                unsafe {
+                    asm!("mov cr3, {}", in(reg) pm.kernel_cr3);
+                }
+                pm.current_pid = 0;
+            }
+
+            loop {}
+        }
+    } else {
+        // If we can't get the lock, skip this scheduling round to avoid deadlock
+        serial_println!("Failed to acquire PROCESS_MANAGER lock, skipping scheduling");
+
+        loop {}
+    }
+}
+
+// Function to queue a process without immediately running it
+pub fn queue_example_program(
+    frame_allocator: &mut BootInfoFrameAllocator,
+    physical_memory_offset: VirtAddr,
+) -> Result<u32, ProcessError> {
+    let mut process_manager = PROCESS_MANAGER.lock();
+    let program = include_bytes!("../hello.elf");
+
+    match process_manager.create_process(program, frame_allocator, physical_memory_offset) {
+        Ok(pid) => {
+            serial_println!("Queued process with PID: {}", pid);
+            Ok(pid)
+        }
+        Err(e) => {
+            serial_println!("Failed to queue process: {:?}", e);
+            Err(e)
+        }
+    }
+}
+
+pub fn context_switch_to(process: &mut Process) -> ! {
+    serial_println!("Preparing to switch context to process");
+
+    // Get the process and check if it's a kernel or user process
+    process.state = ProcessState::Running;
+
+    match process.process_type {
+        ProcessType::Kernel => {
+            serial_println!("Context switching to kernel process ");
+            perform_kernel_context_switch(process);
+        }
+        ProcessType::User => {
+            serial_println!("Context switching to user process");
+            let page_table_frame = process.address_space.page_table_frame;
+            perform_context_switch(page_table_frame, process);
+        }
+    }
+}
+
+fn perform_kernel_context_switch(process: &mut Process) -> ! {
+    serial_println!("Performing kernel context switch to process");
+
+    serial_println!("Switching to kernel process {}", process.pid);
     serial_println!(
-        "Preparing to switch to user mode for process {}",
-        process.pid
-    );
-    serial_println!(
-        "User IP: {:?}, User SP: {:?}",
+        "Entry point: {:?}, Stack: {:?}",
         process.instruction_pointer,
         process.stack_pointer
     );
 
-    // Get the page table frame for switching
-    let page_table_frame = process.address_space.page_table_frame;
+    unsafe {
+        // Ensure we're using the kernel's page table
+        let kernel_cr3 = x86_64::registers::control::Cr3::read()
+            .0
+            .start_address()
+            .as_u64();
+        asm!("mov cr3, {}", in(reg) kernel_cr3);
+        x86_64::instructions::tlb::flush_all();
+
+        // Restore register state and switch to the kernel process
+        // First set up the stack pointer (ensure 16-byte alignment)
+        let aligned_stack = process.stack_pointer.as_u64() & !0xf;
+        let entry_point = process.instruction_pointer.as_u64();
+
+        // Use a simpler approach that doesn't require so many registers
+        asm!(
+            // Set up stack pointer with proper alignment
+            "mov rsp, {stack}",
+            // Jump to the entry point
+            "jmp {entry}",
+            stack = in(reg) aligned_stack,
+            entry = in(reg) entry_point,
+            options(noreturn)
+        );
+    }
+}
+
+fn perform_context_switch(
+    page_table_frame: x86_64::structures::paging::PhysFrame,
+    process: &Process,
+) -> ! {
+    // Get the process to switch to
+    serial_println!("Performing full context switch to process {}", process.pid);
+
+    // Switch to the process's page table
+    unsafe {
+        asm!("mov cr3, {}", in(reg) page_table_frame.start_address().as_u64());
+    }
+
+    serial_println!("Switched to process page table");
+
+    // Now actually switch to user mode and start executing the process
+    switch_to_user_mode_direct(process);
+}
+
+fn switch_to_user_mode_direct(process: &Process) -> ! {
+    serial_println!("Switching to user mode for process {}", process.pid);
+    serial_println!(
+        "Entry point: {:?}, Stack: {:?}",
+        process.instruction_pointer,
+        process.stack_pointer
+    );
 
     // Get user mode selectors from GDT - these should already have RPL=3
     let user_code_sel = u64::from(crate::gdt::GDT.1.user_code.0) | 3;
     let user_data_sel = u64::from(crate::gdt::GDT.1.user_data.0) | 3;
 
-    serial_println!("User code selector: 0x{:x}", user_code_sel);
-    serial_println!("User data selector: 0x{:x}", user_data_sel);
-
-    // Check if NX bit is enabled in EFER
-    let mut efer: u64;
     unsafe {
-        asm!("mov {}, cr4", out(reg) efer);
-    }
-    serial_println!("CR4 register: 0x{:x}", efer);
-
-    // Check EFER register
-    unsafe {
-        asm!("
-            mov ecx, 0xc0000080
-            rdmsr
-            mov {}, rax
-        ", out(reg) efer);
-    }
-    serial_println!("EFER register: 0x{:x}", efer);
-    if efer & (1 << 11) != 0 {
-        serial_println!("NX bit is ENABLED in EFER - pages are non-executable by default");
-    } else {
-        serial_println!("NX bit is DISABLED in EFER");
-    }
-    serial_println!("Page table frame: {:?}", page_table_frame.start_address());
-
-    // Look at the actual program code that was loaded
-    let program_frame_addr = physical_memory_offset + 0x1f000;
-    let program_ptr = program_frame_addr.as_ptr::<u8>();
-    unsafe {
-        serial_println!(
-            "Program code first 32 bytes: {:02x?}",
-            core::slice::from_raw_parts(program_ptr, 32)
-        );
-    }
-
-    // Let's also verify the process page table mapping
-    serial_println!("Verifying process page table mappings...");
-
-    // Let's temporarily switch to the process page table and see if we can read the program
-    let current_cr3: u64;
-    unsafe {
-        asm!("mov {}, cr3", out(reg) current_cr3);
-        serial_println!("Current CR3: 0x{:x}", current_cr3);
-        serial_println!(
-            "Switching to process CR3: 0x{:x}",
-            page_table_frame.start_address().as_u64()
-        );
-
-        // Switch to process page table temporarily
-        asm!("mov cr3, {}", in(reg) page_table_frame.start_address().as_u64());
-
-        // Try to read from the user program address - this might page fault, so let's be careful
-        serial_println!("Attempting to read from user address space...");
-        // We'll just switch back immediately since this might cause issues
-
-        // Switch back to kernel page table
-        asm!("mov cr3, {}", in(reg) current_cr3);
-        serial_println!("Switched back to kernel page table");
-    }
-
-    // Actually switch to user mode using IRET
-    serial_println!("Switching to user mode using IRET...");
-
-    unsafe {
-        // Switch to the process's page table
-        asm!("mov cr3, {}", in(reg) page_table_frame.start_address().as_u64());
-
-        // Prepare the stack for IRET to user mode
-        // We need to set up the stack with the values IRET expects:
-        // - SS (Stack Segment)
-        // - RSP (Stack Pointer)
-        // - RFLAGS
-        // - CS (Code Segment)
-        // - RIP (Instruction Pointer)
-
         asm!(
             "
             // Set up user mode segments
@@ -959,148 +727,7 @@ pub fn switch_to_user_mode(process: &Process, physical_memory_offset: VirtAddr) 
     }
 }
 
-// Main scheduling function called by timer interrupt
-pub fn schedule() {
-    // Only schedule if we're not already in a critical section
-    if let Some(mut pm) = PROCESS_MANAGER.try_lock() {
-        // Clean up any terminated processes first
-        pm.cleanup_terminated_processes();
-
-        if let Some(next_pid) = pm.get_next_ready_process() {
-            // Only switch if it's different from current process
-            if next_pid != pm.current_pid {
-                pm.context_switch_to(next_pid);
-            }
-        } else {
-            // No ready processes, check if we need to halt the system
-            if !pm.has_running_processes() {
-                serial_println!("No more processes running, halting system...");
-                unsafe {
-                    asm!("mov cr3, {}", in(reg) pm.kernel_cr3);
-                }
-                pm.current_pid = 0;
-                drop(pm); // Release the lock before halting
-            // crate::hlt_loop();
-            } else {
-                // Switch back to kernel and wait
-                if pm.current_pid != 0 {
-                    serial_println!("No ready processes, switching back to kernel");
-                    unsafe {
-                        asm!("mov cr3, {}", in(reg) pm.kernel_cr3);
-                    }
-                    pm.current_pid = 0;
-                }
-            }
-        }
-    } else {
-        // If we can't get the lock, skip this scheduling round to avoid deadlock
-        serial_println!("Failed to acquire PROCESS_MANAGER lock, skipping scheduling");
-    }
-}
-
-// Function to queue a process without immediately running it
-pub fn queue_example_program(
-    frame_allocator: &mut BootInfoFrameAllocator,
-    physical_memory_offset: VirtAddr,
-) -> Result<u32, ProcessError> {
-    let mut process_manager = PROCESS_MANAGER.lock();
-    let program = include_bytes!("../hello.elf");
-
-    match process_manager.create_process(program, frame_allocator, physical_memory_offset) {
-        Ok(pid) => {
-            serial_println!("Queued process with PID: {}", pid);
-            Ok(pid)
-        }
-        Err(e) => {
-            serial_println!("Failed to queue process: {:?}", e);
-            Err(e)
-        }
-    }
-}
-
-// Function to queue the long-running process
-pub fn queue_long_running_process(
-    frame_allocator: &mut BootInfoFrameAllocator,
-    physical_memory_offset: VirtAddr,
-) -> Result<u32, ProcessError> {
-    let mut process_manager = PROCESS_MANAGER.lock();
-    let program = include_bytes!("../long_running.elf");
-
-    match process_manager.create_process(program, frame_allocator, physical_memory_offset) {
-        Ok(pid) => {
-            serial_println!("Queued long-running process with PID: {}", pid);
-            Ok(pid)
-        }
-        Err(e) => {
-            serial_println!("Failed to queue long-running process: {:?}", e);
-            Err(e)
-        }
-    }
-}
-
-// Function to queue the short-lived process
-pub fn queue_short_lived_process(
-    frame_allocator: &mut BootInfoFrameAllocator,
-    physical_memory_offset: VirtAddr,
-) -> Result<u32, ProcessError> {
-    let mut process_manager = PROCESS_MANAGER.lock();
-    let program = include_bytes!("../short_lived.elf");
-
-    match process_manager.create_process(program, frame_allocator, physical_memory_offset) {
-        Ok(pid) => {
-            serial_println!("Queued short-lived process with PID: {}", pid);
-            Ok(pid)
-        }
-        Err(e) => {
-            serial_println!("Failed to queue short-lived process: {:?}", e);
-            Err(e)
-        }
-    }
-}
-
-// Function to queue a simple test process
-pub fn queue_simple_process(
-    frame_allocator: &mut BootInfoFrameAllocator,
-    physical_memory_offset: VirtAddr,
-) -> Result<u32, ProcessError> {
-    let mut process_manager = PROCESS_MANAGER.lock();
-    let program = include_bytes!("../hello.elf");
-
-    match process_manager.create_process(program, frame_allocator, physical_memory_offset) {
-        Ok(pid) => {
-            serial_println!("Queued simple process with PID: {}", pid);
-            Ok(pid)
-        }
-        Err(e) => {
-            serial_println!("Failed to queue simple process: {:?}", e);
-            Err(e)
-        }
-    }
-}
-
-// Function to start the first process and begin preemptive multitasking
-pub fn start_first_process() {
-    serial_println!("Starting first process...");
-
-    // Try to start the first available process
-    if let Some(mut pm) = PROCESS_MANAGER.try_lock() {
-        if let Some(next_pid) = pm.get_next_ready_process() {
-            serial_println!("Starting first process with PID: {}", next_pid);
-            pm.context_switch_to(next_pid);
-            // This should never return as we switch to user mode
-        } else {
-            serial_println!("No ready processes to start");
-        }
-    } else {
-        serial_println!("Failed to acquire PROCESS_MANAGER lock for starting first process");
-    }
-}
-
-// Global function to check if there are running processes
-pub fn has_running_processes() -> bool {
-    if let Some(pm) = PROCESS_MANAGER.try_lock() {
-        pm.has_running_processes()
-    } else {
-        true // If we can't get the lock, assume there are processes running
-    }
+pub fn kill_current_process(exit_code: u8) {
+    let mut pm = PROCESS_MANAGER.lock();
+    pm.exit_current_process(exit_code);
 }

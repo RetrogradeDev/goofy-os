@@ -1,10 +1,12 @@
-use crate::{hlt_loop, print, println, process::PROCESS_MANAGER, serial_println};
+use crate::{hlt_loop, print, println, serial_println};
 use core::arch::naked_asm;
 use lazy_static::lazy_static;
 use pic8259::ChainedPics;
 use spin;
-use x86_64::instructions::port::Port;
-use x86_64::structures::idt::{InterruptDescriptorTable, InterruptStackFrame, PageFaultErrorCode};
+use x86_64::{
+    instructions::interrupts::enable,
+    structures::idt::{InterruptDescriptorTable, InterruptStackFrame, PageFaultErrorCode},
+};
 
 pub const PIC_1_OFFSET: u8 = 32;
 pub const PIC_2_OFFSET: u8 = PIC_1_OFFSET + 8;
@@ -26,34 +28,6 @@ impl InterruptIndex {
     fn as_u8(self) -> u8 {
         self as u8
     }
-}
-
-// PIT (Programmable Interval Timer) constants
-const PIT_FREQUENCY: u32 = 1193182; // Base frequency of the PIT
-const TIMER_FREQUENCY: u32 = 100; // Desired interrupt frequency (100 Hz = 10ms intervals)
-
-/// Initialize the PIT (Programmable Interval Timer) to generate timer interrupts
-pub fn init_timer() {
-    let divisor = PIT_FREQUENCY / TIMER_FREQUENCY;
-
-    serial_println!(
-        "Initializing PIT with frequency {} Hz (divisor: {})",
-        TIMER_FREQUENCY,
-        divisor
-    );
-
-    unsafe {
-        // Set the PIT to Mode 3 (square wave generator)
-        let mut cmd_port = Port::new(0x43);
-        cmd_port.write(0x36u8); // Channel 0, lobyte/hibyte, mode 3, binary
-
-        // Set the frequency divisor
-        let mut data_port = Port::new(0x40);
-        data_port.write((divisor & 0xFF) as u8); // Low byte
-        data_port.write(((divisor >> 8) & 0xFF) as u8); // High byte
-    }
-
-    serial_println!("PIT initialized successfully");
 }
 
 lazy_static! {
@@ -141,15 +115,36 @@ extern "x86-interrupt" fn double_fault_handler(
 }
 
 extern "x86-interrupt" fn timer_handler(_stack_frame: InterruptStackFrame) {
-    print!("."); // Doesn't get logged in the console!!!
-
-    // Trigger process scheduling every timer tick
-    crate::process::schedule();
+    print!(".");
+    serial_println!("TIMER");
 
     // Notify the Programmable Interrupt Controller (PIC) that the interrupt has been handled
     unsafe {
         PICS.lock()
             .notify_end_of_interrupt(InterruptIndex::Timer.as_u8());
+    }
+
+    // Implement preemptive scheduling
+    // Check if we should schedule a different process
+    if let Some(mut pm) = crate::process::PROCESS_MANAGER.try_lock() {
+        if pm.has_running_processes() {
+            let current_pid = pm.get_current_pid();
+            let next_pid = pm.get_next_ready_process();
+
+            // If we have a next process and it's different from current, schedule it
+            if let Some(next) = next_pid {
+                if next != current_pid {
+                    drop(pm);
+                    // Call scheduler to switch to the next process
+                    crate::process::schedule();
+                }
+            } else if current_pid != 0 {
+                // No ready processes, but we're not in kernel mode
+                // Switch back to kernel idle
+                drop(pm);
+                crate::process::schedule();
+            }
+        }
     }
 }
 
@@ -166,6 +161,8 @@ extern "x86-interrupt" fn keyboard_interrupt_handler(_stack_frame: InterruptStac
     }
 }
 
+// Debug version to figure out correct register values
+// TODO
 #[unsafe(naked)]
 unsafe extern "C" fn syscall_handler_asm() {
     naked_asm!(
@@ -178,7 +175,7 @@ unsafe extern "C" fn syscall_handler_asm() {
         "push rdi",
         "push rbp",
 
-        // Pass register values as arguments to syscall handler
+        // Pass register values as arguments to debug function
         // Move original register values (now on stack) to argument registers
         "mov rdi, [rsp + 48]",  // original rax (syscall number)
         "mov rsi, [rsp + 8]",   // original rdi (arg1)
@@ -199,16 +196,20 @@ unsafe extern "C" fn syscall_handler_asm() {
         "pop rbx",
         "pop rax",
 
-        // Return from interrupt - the CPU automatically handles RIP correctly
+        // Pop the user RIP, increment it, and push it back.
+        "pop r11",
+        "add r11, 2",
+        "push r11",
+
         "iretq",
 
-        sym syscall_handler_rust
+        sym syscall_handler_rust_debug
     );
 }
 
-// Rust syscall handler that processes the actual syscall
-extern "C" fn syscall_handler_rust(rax: u64, rdi: u64, rsi: u64, rdx: u64) -> u64 {
-    serial_println!("Syscall handler called");
+// TODO Debug version to figure out correct register values
+extern "C" fn syscall_handler_rust_debug(rax: u64, rdi: u64, rsi: u64, rdx: u64) -> u64 {
+    serial_println!("Syscall handler (Rust) called");
     serial_println!(
         "Syscall: rax={}, rdi={}, rsi=0x{:x}, rdx={}",
         rax,
@@ -222,14 +223,15 @@ extern "C" fn syscall_handler_rust(rax: u64, rdi: u64, rsi: u64, rdx: u64) -> u6
 
     // Check if process exited
     if result == PROCESS_EXITED {
-        serial_println!("Process exited, terminating and checking for other processes...");
+        serial_println!("Marking process as terminated...");
 
-        // Schedule process cleanup for the next timer interrupt instead of doing it here
-        // This avoids lock contention issues
-        serial_println!("Process marked for cleanup, waiting for scheduler...");
+        crate::process::kill_current_process(rdi as u8);
 
-        // Return 0 to indicate successful exit, let timer interrupt handle cleanup
-        return 0;
+        serial_println!("Process marked for exit, returning to scheduler...");
+
+        enable(); // Just to be sure
+
+        crate::process::schedule();
     }
 
     serial_println!("About to return from syscall...");
@@ -256,6 +258,11 @@ fn sys_write(fd: u64, buf_ptr: u64, count: u64) -> u64 {
         count
     );
 
+    print!(
+        "sys_write called: fd={}, buf_ptr=0x{:x}, count={}",
+        fd, buf_ptr, count
+    );
+
     if fd == 1 {
         // stdout
         // For now, just print that we got a write syscall
@@ -271,11 +278,8 @@ fn sys_exit(exit_code: u64) -> u64 {
     serial_println!("sys_exit called with code: {}", exit_code);
     serial_println!("Process exiting...");
 
-    // Mark the current process as terminated so the scheduler can clean it up
-    if let Some(mut pm) = crate::process::PROCESS_MANAGER.try_lock() {
-        pm.mark_current_process_terminated();
-    }
-
+    // Instead of immediately cleaning up, just mark the process for termination
+    // The scheduler will handle the actual cleanup on the next timer tick
     serial_println!("Process marked for termination with code: {}", exit_code);
 
     // Return special value to indicate process exit
