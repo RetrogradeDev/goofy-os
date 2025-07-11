@@ -177,7 +177,7 @@ extern "C" fn executor_entry_point() -> ! {
         crate::serial_println!("Executor batch complete, halting...");
         // Use a simple pause to avoid busy-waiting
         // This allows other processes to run while keeping this process alive
-        x86_64::instructions::hlt();
+        enable_and_hlt();
     }
 }
 
