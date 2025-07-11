@@ -229,14 +229,9 @@ extern "C" fn syscall_handler_rust_debug(rax: u64, rdi: u64, rsi: u64, rdx: u64)
 
         serial_println!("Process marked for exit, returning to scheduler...");
 
-        enable();
+        enable(); // Just to be sure
 
-        //loop {
         crate::process::schedule();
-
-        // Allow interrupts to be processed
-        // hlt();
-        // }
     }
 
     serial_println!("About to return from syscall...");
@@ -261,6 +256,11 @@ fn sys_write(fd: u64, buf_ptr: u64, count: u64) -> u64 {
         fd,
         buf_ptr,
         count
+    );
+
+    print!(
+        "sys_write called: fd={}, buf_ptr=0x{:x}, count={}",
+        fd, buf_ptr, count
     );
 
     if fd == 1 {

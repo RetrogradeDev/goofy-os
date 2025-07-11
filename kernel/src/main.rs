@@ -17,7 +17,6 @@ use kernel::{
     },
     memory::BootInfoFrameAllocator,
     println,
-    process::context_switch_to,
     serial_println,
 };
 
@@ -111,8 +110,7 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
         const KERNEL_STACK_SIZE: usize = 4096 * 4; // 16KB stack
         static mut KERNEL_STACK: [u8; KERNEL_STACK_SIZE] = [0; KERNEL_STACK_SIZE];
 
-        let kernel_stack =
-            unsafe { VirtAddr::from_ptr(&raw const KERNEL_STACK) + KERNEL_STACK_SIZE as u64 };
+        let kernel_stack = VirtAddr::from_ptr(&raw const KERNEL_STACK) + KERNEL_STACK_SIZE as u64;
 
         match pm.create_kernel_process(executor_entry_addr, kernel_stack) {
             Ok(pid) => {
@@ -145,19 +143,14 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     #[cfg(test)]
     test_main();
 
-    // Start the first process (should be the executor)
+    {
+        use kernel::process::PROCESS_MANAGER;
 
-    use kernel::process::PROCESS_MANAGER;
+        let mut pm = PROCESS_MANAGER.lock();
+        let pid = 1;
 
-    let mut pm = PROCESS_MANAGER.lock();
-    let pid = 1;
-    let mut process = pm.get_process(pid).unwrap().clone();
-
-    pm.set_current_pid(pid);
-
-    drop(pm);
-
-    // context_switch_to(&mut process);
+        pm.set_current_pid(pid);
+    }
 
     // The kernel should continue running and let the scheduler handle task execution
     interrupts::enable();
