@@ -162,18 +162,26 @@ pub fn init_global_executor() {
 
 /// Entry point for the executor kernel process
 /// This function will be called repeatedly by the process scheduler
-extern "C" fn executor_entry_point() {
-    unsafe {
-        let executor_ptr = &raw mut GLOBAL_EXECUTOR;
-        if let Some(executor) = &mut *executor_ptr {
-            executor.run_batch();
+extern "C" fn executor_entry_point() -> ! {
+    crate::serial_println!("Executor kernel process started!");
+    loop {
+        crate::serial_println!("Executor running batch...");
+        unsafe {
+            let executor_ptr = &raw mut GLOBAL_EXECUTOR;
+            if let Some(executor) = &mut *executor_ptr {
+                executor.run_batch();
+            } else {
+                crate::serial_println!("Executor not initialized!");
+            }
         }
+        crate::serial_println!("Executor batch complete, halting...");
+        // Use a simple pause to avoid busy-waiting
+        // This allows other processes to run while keeping this process alive
+        x86_64::instructions::hlt();
     }
-    // Function returns, allowing the scheduler to switch to other processes
-    // The scheduler will call this function again when the executor process is scheduled
 }
 
 /// Get the entry point function for the executor kernel process
-pub fn get_executor_entry_point() -> extern "C" fn() {
+pub fn get_executor_entry_point() -> extern "C" fn() -> ! {
     executor_entry_point
 }

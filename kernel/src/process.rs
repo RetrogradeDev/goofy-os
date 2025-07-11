@@ -490,6 +490,10 @@ impl ProcessManager {
         self.current_pid = pid;
     }
 
+    pub fn get_current_pid(&self) -> u32 {
+        self.current_pid
+    }
+
     pub fn get_process(&self, pid: u32) -> Option<&Process> {
         self.processes.iter().find(|p| p.pid == pid)
     }
@@ -555,141 +559,18 @@ lazy_static! {
     pub static ref PROCESS_MANAGER: Mutex<ProcessManager> = Mutex::new(ProcessManager::new());
 }
 
-pub fn switch_to_user_mode(process: &Process, physical_memory_offset: VirtAddr) {
-    serial_println!(
-        "Preparing to switch to user mode for process {}",
-        process.pid
-    );
-    serial_println!(
-        "User IP: {:?}, User SP: {:?}",
-        process.instruction_pointer,
-        process.stack_pointer
-    );
-
-    // Get the page table frame for switching
-    let page_table_frame = process.address_space.page_table_frame;
-
-    // Get user mode selectors from GDT - these should already have RPL=3
-    let user_code_sel = u64::from(crate::gdt::GDT.1.user_code.0) | 3;
-    let user_data_sel = u64::from(crate::gdt::GDT.1.user_data.0) | 3;
-
-    serial_println!("User code selector: 0x{:x}", user_code_sel);
-    serial_println!("User data selector: 0x{:x}", user_data_sel);
-
-    // Check if NX bit is enabled in EFER
-    let mut efer: u64;
-    unsafe {
-        asm!("mov {}, cr4", out(reg) efer);
-    }
-    serial_println!("CR4 register: 0x{:x}", efer);
-
-    // Check EFER register
-    unsafe {
-        asm!("
-            mov ecx, 0xc0000080
-            rdmsr
-            mov {}, rax
-        ", out(reg) efer);
-    }
-    serial_println!("EFER register: 0x{:x}", efer);
-    if efer & (1 << 11) != 0 {
-        serial_println!("NX bit is ENABLED in EFER - pages are non-executable by default");
-    } else {
-        serial_println!("NX bit is DISABLED in EFER");
-    }
-    serial_println!("Page table frame: {:?}", page_table_frame.start_address());
-
-    // Look at the actual program code that was loaded
-    let program_frame_addr = physical_memory_offset + 0x1f000;
-    let program_ptr = program_frame_addr.as_ptr::<u8>();
-    unsafe {
-        serial_println!(
-            "Program code first 32 bytes: {:02x?}",
-            core::slice::from_raw_parts(program_ptr, 32)
-        );
-    }
-
-    // Let's also verify the process page table mapping
-    serial_println!("Verifying process page table mappings...");
-
-    // Let's temporarily switch to the process page table and see if we can read the program
-    let current_cr3: u64;
-    unsafe {
-        asm!("mov {}, cr3", out(reg) current_cr3);
-        serial_println!("Current CR3: 0x{:x}", current_cr3);
-        serial_println!(
-            "Switching to process CR3: 0x{:x}",
-            page_table_frame.start_address().as_u64()
-        );
-
-        // Switch to process page table temporarily
-        asm!("mov cr3, {}", in(reg) page_table_frame.start_address().as_u64());
-
-        // Try to read from the user program address - this might page fault, so let's be careful
-        serial_println!("Attempting to read from user address space...");
-        // We'll just switch back immediately since this might cause issues
-
-        // Switch back to kernel page table
-        asm!("mov cr3, {}", in(reg) current_cr3);
-        serial_println!("Switched back to kernel page table");
-    }
-
-    // Actually switch to user mode using IRET
-    serial_println!("Switching to user mode using IRET...");
-
-    unsafe {
-        // Switch to the process's page table
-        asm!("mov cr3, {}", in(reg) page_table_frame.start_address().as_u64());
-
-        // Prepare the stack for IRET to user mode
-        // We need to set up the stack with the values IRET expects:
-        // - SS (Stack Segment)
-        // - RSP (Stack Pointer)
-        // - RFLAGS
-        // - CS (Code Segment)
-        // - RIP (Instruction Pointer)
-
-        asm!(
-            "
-            // Set up user mode segments
-            mov ax, {user_data_sel_16:x}
-            mov ds, ax
-            mov es, ax
-            mov fs, ax
-            mov gs, ax
-
-            // Push values for IRET (in reverse order)
-            push {user_data_sel}        // SS
-            push {user_stack_ptr}       // RSP
-            push 0x202                  // RFLAGS (interrupts enabled)
-            push {user_code_sel}        // CS
-            push {user_ip}              // RIP
-
-            // Switch to user mode
-            iretq
-            ",
-            user_data_sel_16 = in(reg) (user_data_sel as u16),
-            user_data_sel = in(reg) user_data_sel,
-            user_stack_ptr = in(reg) process.stack_pointer.as_u64(),
-            user_code_sel = in(reg) user_code_sel,
-            user_ip = in(reg) process.instruction_pointer.as_u64(),
-            options(noreturn)
-        );
-    }
-}
-
 // Main scheduling function called by timer interrupt
 pub fn schedule() -> ! {
     // Only schedule if we're not already in a critical section
     if let Some(mut pm) = PROCESS_MANAGER.try_lock() {
         if let Some(next_pid) = pm.get_next_ready_process() {
             // Only switch if it's different from current process
-                let mut process = pm.get_process(next_pid).unwrap().clone();
-                pm.current_pid = next_pid;
+            let mut process = pm.get_process(next_pid).unwrap().clone();
+            pm.current_pid = next_pid;
 
-                drop(pm);
+            drop(pm);
 
-                context_switch_to(&mut process);
+            context_switch_to(&mut process);
         } else {
             // No ready processes, switch back to kernel
             if pm.current_pid != 0 {
@@ -701,7 +582,6 @@ pub fn schedule() -> ! {
             }
 
             loop {}
-
         }
     } else {
         // If we can't get the lock, skip this scheduling round to avoid deadlock
@@ -731,26 +611,24 @@ pub fn queue_example_program(
     }
 }
 
-
 pub fn context_switch_to(process: &mut Process) -> ! {
     serial_println!("Preparing to switch context to process");
 
     // Get the process and check if it's a kernel or user process
-        process.state = ProcessState::Running;
+    process.state = ProcessState::Running;
 
-        match process.process_type {
-            ProcessType::Kernel => {
-                serial_println!("Context switching to kernel process ");
-                perform_kernel_context_switch(process);
-            }
-            ProcessType::User => {
-                serial_println!("Context switching to user process");
-                let page_table_frame = process.address_space.page_table_frame;
-                perform_context_switch(page_table_frame, process);
-            }
+    match process.process_type {
+        ProcessType::Kernel => {
+            serial_println!("Context switching to kernel process ");
+            perform_kernel_context_switch(process);
         }
+        ProcessType::User => {
+            serial_println!("Context switching to user process");
+            let page_table_frame = process.address_space.page_table_frame;
+            perform_context_switch(page_table_frame, process);
+        }
+    }
 }
-
 
 fn perform_kernel_context_switch(process: &mut Process) -> ! {
     serial_println!("Performing kernel context switch to process");
@@ -762,42 +640,49 @@ fn perform_kernel_context_switch(process: &mut Process) -> ! {
         process.stack_pointer
     );
 
-    // For kernel processes, we perform a direct call to the entry point
-    // The process should be designed to yield voluntarily by returning from the function
-    let entry_point: extern "C" fn() =
-        unsafe { core::mem::transmute(process.instruction_pointer.as_ptr::<u8>()) };
+    unsafe {
+        // Ensure we're using the kernel's page table
+        let kernel_cr3 = x86_64::registers::control::Cr3::read()
+            .0
+            .start_address()
+            .as_u64();
+        asm!("mov cr3, {}", in(reg) kernel_cr3);
+        x86_64::instructions::tlb::flush_all();
 
-    loop {
-    // Call the kernel process entry point
-    entry_point();
+        // Restore register state and switch to the kernel process
+        // First set up the stack pointer (ensure 16-byte alignment)
+        let aligned_stack = process.stack_pointer.as_u64() & !0xf;
+        let entry_point = process.instruction_pointer.as_u64();
 
-    // Give the CPU time to other processes
-
+        // Use a simpler approach that doesn't require so many registers
+        asm!(
+            // Set up stack pointer with proper alignment
+            "mov rsp, {stack}",
+            // Jump to the entry point
+            "jmp {entry}",
+            stack = in(reg) aligned_stack,
+            entry = in(reg) entry_point,
+            options(noreturn)
+        );
     }
-
-    // After the function returns, the process has yielded
-    serial_println!("Kernel process {} yielded", process.pid);
-
-        process.state = ProcessState::Ready;
 }
-
 
 fn perform_context_switch(
     page_table_frame: x86_64::structures::paging::PhysFrame,
     process: &Process,
 ) -> ! {
     // Get the process to switch to
-        serial_println!("Performing full context switch to process {}", process.pid);
+    serial_println!("Performing full context switch to process {}", process.pid);
 
-        // Switch to the process's page table
-        unsafe {
-            asm!("mov cr3, {}", in(reg) page_table_frame.start_address().as_u64());
-        }
+    // Switch to the process's page table
+    unsafe {
+        asm!("mov cr3, {}", in(reg) page_table_frame.start_address().as_u64());
+    }
 
-        serial_println!("Switched to process page table");
+    serial_println!("Switched to process page table");
 
-        // Now actually switch to user mode and start executing the process
-        switch_to_user_mode_direct(process);
+    // Now actually switch to user mode and start executing the process
+    switch_to_user_mode_direct(process);
 }
 
 fn switch_to_user_mode_direct(process: &Process) -> ! {

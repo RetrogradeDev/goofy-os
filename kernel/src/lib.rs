@@ -15,7 +15,6 @@ use exit::{QemuExitCode, exit_qemu};
 extern crate alloc;
 
 pub mod allocator;
-pub mod example_program;
 pub mod exit;
 pub mod framebuffer;
 pub mod gdt;
@@ -47,6 +46,8 @@ pub fn init(physical_memory_offset: x86_64::VirtAddr) {
     serial_println!("Initializing PICs...");
     unsafe { interrupts::PICS.lock().initialize() };
     serial_println!("Enabling interrupts...");
+
+    // Disable interrupts to prevent switching to processes before they are initialized
     x86_64::instructions::interrupts::disable();
     serial_println!("Done!");
 }

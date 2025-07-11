@@ -1,9 +1,12 @@
 use crate::{hlt_loop, print, println, serial_println};
-use core::arch::{naked_asm, asm};
+use core::arch::naked_asm;
 use lazy_static::lazy_static;
 use pic8259::ChainedPics;
 use spin;
-use x86_64::{instructions::{hlt, interrupts::enable}, structures::idt::{InterruptDescriptorTable, InterruptStackFrame, PageFaultErrorCode}};
+use x86_64::{
+    instructions::interrupts::enable,
+    structures::idt::{InterruptDescriptorTable, InterruptStackFrame, PageFaultErrorCode},
+};
 
 pub const PIC_1_OFFSET: u8 = 32;
 pub const PIC_2_OFFSET: u8 = PIC_1_OFFSET + 8;
@@ -113,11 +116,7 @@ extern "x86-interrupt" fn double_fault_handler(
 
 extern "x86-interrupt" fn timer_handler(_stack_frame: InterruptStackFrame) {
     print!(".");
-
-    // Trigger process scheduling every timer tick
-    //
     serial_println!("TIMER");
-
 
     // Notify the Programmable Interrupt Controller (PIC) that the interrupt has been handled
     unsafe {
@@ -125,8 +124,28 @@ extern "x86-interrupt" fn timer_handler(_stack_frame: InterruptStackFrame) {
             .notify_end_of_interrupt(InterruptIndex::Timer.as_u8());
     }
 
-    crate::process::schedule();
+    // Implement preemptive scheduling
+    // Check if we should schedule a different process
+    if let Some(mut pm) = crate::process::PROCESS_MANAGER.try_lock() {
+        if pm.has_running_processes() {
+            let current_pid = pm.get_current_pid();
+            let next_pid = pm.get_next_ready_process();
 
+            // If we have a next process and it's different from current, schedule it
+            if let Some(next) = next_pid {
+                if next != current_pid {
+                    drop(pm);
+                    // Call scheduler to switch to the next process
+                    crate::process::schedule();
+                }
+            } else if current_pid != 0 {
+                // No ready processes, but we're not in kernel mode
+                // Switch back to kernel idle
+                drop(pm);
+                crate::process::schedule();
+            }
+        }
+    }
 }
 
 extern "x86-interrupt" fn keyboard_interrupt_handler(_stack_frame: InterruptStackFrame) {
@@ -213,11 +232,11 @@ extern "C" fn syscall_handler_rust_debug(rax: u64, rdi: u64, rsi: u64, rdx: u64)
         enable();
 
         //loop {
-            crate::process::schedule();
+        crate::process::schedule();
 
-            // Allow interrupts to be processed
-            // hlt();
-            // }
+        // Allow interrupts to be processed
+        // hlt();
+        // }
     }
 
     serial_println!("About to return from syscall...");

@@ -11,9 +11,14 @@ extern crate alloc;
 use bootloader_api::{BootInfo, entry_point};
 use kernel::{
     // framebuffer::clear_screen,
-    framebuffer::{FrameBufferWriter, FRAMEBUFFER}, graphics::{
+    framebuffer::{FRAMEBUFFER, FrameBufferWriter},
+    graphics::{
         draw_circle, draw_circle_outline, draw_line, draw_rect, draw_rect_outline, set_pixel,
-    }, memory::BootInfoFrameAllocator, println, process::context_switch_to, serial_println
+    },
+    memory::BootInfoFrameAllocator,
+    println,
+    process::context_switch_to,
+    serial_println,
 };
 
 use bootloader_api::config::{BootloaderConfig, Mapping};
@@ -102,8 +107,12 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
         let executor_entry = kernel::task::executor::get_executor_entry_point();
         let executor_entry_addr = VirtAddr::new(executor_entry as *const () as u64);
 
-        // Use a kernel stack address - we'll just use a static area for simplicity
-        let kernel_stack = VirtAddr::new(0x_4444_4444_0000);
+        // Allocate a proper kernel stack
+        const KERNEL_STACK_SIZE: usize = 4096 * 4; // 16KB stack
+        static mut KERNEL_STACK: [u8; KERNEL_STACK_SIZE] = [0; KERNEL_STACK_SIZE];
+
+        let kernel_stack =
+            unsafe { VirtAddr::from_ptr(&raw const KERNEL_STACK) + KERNEL_STACK_SIZE as u64 };
 
         match pm.create_kernel_process(executor_entry_addr, kernel_stack) {
             Ok(pid) => {
@@ -138,18 +147,17 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
 
     // Start the first process (should be the executor)
 
-        use kernel::process::PROCESS_MANAGER;
+    use kernel::process::PROCESS_MANAGER;
 
-        let mut pm = PROCESS_MANAGER.lock();
-        let pid = 1;
-        let mut process = pm.get_process(pid).unwrap().clone();
+    let mut pm = PROCESS_MANAGER.lock();
+    let pid = 1;
+    let mut process = pm.get_process(pid).unwrap().clone();
 
-        pm.set_current_pid(pid);
+    pm.set_current_pid(pid);
 
-        drop(pm);
+    drop(pm);
 
-        // context_switch_to(&mut process);
-
+    // context_switch_to(&mut process);
 
     // The kernel should continue running and let the scheduler handle task execution
     interrupts::enable();
