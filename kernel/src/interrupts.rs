@@ -1,9 +1,9 @@
 use crate::{hlt_loop, print, println, serial_println};
-use core::arch::naked_asm;
+use core::arch::{naked_asm, asm};
 use lazy_static::lazy_static;
 use pic8259::ChainedPics;
 use spin;
-use x86_64::structures::idt::{InterruptDescriptorTable, InterruptStackFrame, PageFaultErrorCode};
+use x86_64::{instructions::{hlt, interrupts::enable}, structures::idt::{InterruptDescriptorTable, InterruptStackFrame, PageFaultErrorCode}};
 
 pub const PIC_1_OFFSET: u8 = 32;
 pub const PIC_2_OFFSET: u8 = PIC_1_OFFSET + 8;
@@ -115,13 +115,18 @@ extern "x86-interrupt" fn timer_handler(_stack_frame: InterruptStackFrame) {
     print!(".");
 
     // Trigger process scheduling every timer tick
-    crate::process::schedule();
+    //
+    serial_println!("TIMER");
+
 
     // Notify the Programmable Interrupt Controller (PIC) that the interrupt has been handled
     unsafe {
         PICS.lock()
             .notify_end_of_interrupt(InterruptIndex::Timer.as_u8());
     }
+
+    crate::process::schedule();
+
 }
 
 extern "x86-interrupt" fn keyboard_interrupt_handler(_stack_frame: InterruptStackFrame) {
@@ -199,13 +204,20 @@ extern "C" fn syscall_handler_rust_debug(rax: u64, rdi: u64, rsi: u64, rdx: u64)
 
     // Check if process exited
     if result == PROCESS_EXITED {
-        // If we have another process to run, just return
-        // TODO: Get the next process from the scheduler
+        serial_println!("Marking process as terminated...");
+
+        crate::process::kill_current_process(rdi as u8);
+
         serial_println!("Process marked for exit, returning to scheduler...");
 
-        loop {
+        enable();
+
+        //loop {
             crate::process::schedule();
-        }
+
+            // Allow interrupts to be processed
+            // hlt();
+            // }
     }
 
     serial_println!("About to return from syscall...");

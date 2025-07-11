@@ -11,16 +11,13 @@ extern crate alloc;
 use bootloader_api::{BootInfo, entry_point};
 use kernel::{
     // framebuffer::clear_screen,
-    framebuffer::{FRAMEBUFFER, FrameBufferWriter},
-    graphics::{
+    framebuffer::{FrameBufferWriter, FRAMEBUFFER}, graphics::{
         draw_circle, draw_circle_outline, draw_line, draw_rect, draw_rect_outline, set_pixel,
-    },
-    memory::BootInfoFrameAllocator,
-    println,
-    serial_println,
+    }, memory::BootInfoFrameAllocator, println, process::context_switch_to, serial_println
 };
 
 use bootloader_api::config::{BootloaderConfig, Mapping};
+use x86_64::instructions::interrupts;
 
 pub static BOOTLOADER_CONFIG: BootloaderConfig = {
     let mut config = BootloaderConfig::new_default();
@@ -140,17 +137,22 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     test_main();
 
     // Start the first process (should be the executor)
-    {
+
         use kernel::process::PROCESS_MANAGER;
 
         let mut pm = PROCESS_MANAGER.lock();
-        if let Some(next_pid) = pm.get_next_ready_process() {
-            serial_println!("Starting first process with PID: {}", next_pid);
-            pm.context_switch_to(next_pid);
-        }
-    }
+        let pid = 1;
+        let mut process = pm.get_process(pid).unwrap().clone();
+
+        pm.set_current_pid(pid);
+
+        drop(pm);
+
+        // context_switch_to(&mut process);
+
 
     // The kernel should continue running and let the scheduler handle task execution
+    interrupts::enable();
     kernel::hlt_loop();
 }
 

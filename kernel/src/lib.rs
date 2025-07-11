@@ -47,7 +47,7 @@ pub fn init(physical_memory_offset: x86_64::VirtAddr) {
     serial_println!("Initializing PICs...");
     unsafe { interrupts::PICS.lock().initialize() };
     serial_println!("Enabling interrupts...");
-    x86_64::instructions::interrupts::enable();
+    x86_64::instructions::interrupts::disable();
     serial_println!("Done!");
 }
 

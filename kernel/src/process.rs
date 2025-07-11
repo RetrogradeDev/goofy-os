@@ -486,8 +486,16 @@ impl ProcessManager {
         }
     }
 
+    pub fn set_current_pid(&mut self, pid: u32) {
+        self.current_pid = pid;
+    }
+
     pub fn get_process(&self, pid: u32) -> Option<&Process> {
         self.processes.iter().find(|p| p.pid == pid)
+    }
+
+    pub fn get_process_mut(&mut self, pid: u32) -> Option<&mut Process> {
+        self.processes.iter_mut().find(|p| p.pid == pid)
     }
 
     pub fn exit_current_process(&mut self, exit_code: u8) {
@@ -532,155 +540,6 @@ impl ProcessManager {
             }
         }
         None
-    }
-
-    pub fn context_switch_to(&mut self, pid: u32) {
-        // Mark current process as ready (if it exists and isn't terminated)
-        if self.current_pid != 0 {
-            if let Some(current_process) = self
-                .processes
-                .iter_mut()
-                .find(|p| p.pid == self.current_pid)
-            {
-                if current_process.state == ProcessState::Running {
-                    current_process.state = ProcessState::Ready;
-                }
-            }
-        }
-
-        serial_println!("Preparing to switch context to process {}", pid);
-
-        // Get the process and check if it's a kernel or user process
-        if let Some(new_process) = self.processes.iter_mut().find(|p| p.pid == pid) {
-            new_process.state = ProcessState::Running;
-            self.current_pid = pid;
-
-            match new_process.process_type {
-                ProcessType::Kernel => {
-                    serial_println!("Context switching to kernel process {}", pid);
-                    let temp_pid = pid; // Store PID since we'll need it after the borrow
-                    // Release the borrow by ending the scope
-                    let _ = new_process;
-                    self.perform_kernel_context_switch(temp_pid);
-                }
-                ProcessType::User => {
-                    serial_println!("Context switching to user process {}", pid);
-                    let page_table_frame = new_process.address_space.page_table_frame;
-                    self.perform_context_switch(page_table_frame, pid);
-                }
-            }
-        } else {
-            serial_println!("Process with PID {} not found", pid);
-        }
-    }
-
-    fn perform_context_switch(
-        &self,
-        page_table_frame: x86_64::structures::paging::PhysFrame,
-        pid: u32,
-    ) {
-        // Get the process to switch to
-        if let Some(process) = self.get_process(pid) {
-            serial_println!("Performing full context switch to process {}", pid);
-
-            // Switch to the process's page table
-            unsafe {
-                asm!("mov cr3, {}", in(reg) page_table_frame.start_address().as_u64());
-            }
-
-            serial_println!("Switched to process {} page table", pid);
-
-            // Now actually switch to user mode and start executing the process
-            self.switch_to_user_mode_direct(process);
-        } else {
-            serial_println!("Process {} not found for context switch", pid);
-        }
-    }
-
-    fn switch_to_user_mode_direct(&self, process: &Process) {
-        serial_println!("Switching to user mode for process {}", process.pid);
-        serial_println!(
-            "Entry point: {:?}, Stack: {:?}",
-            process.instruction_pointer,
-            process.stack_pointer
-        );
-
-        // Get user mode selectors from GDT - these should already have RPL=3
-        let user_code_sel = u64::from(crate::gdt::GDT.1.user_code.0) | 3;
-        let user_data_sel = u64::from(crate::gdt::GDT.1.user_data.0) | 3;
-
-        unsafe {
-            asm!(
-                "
-                // Set up user mode segments
-                mov ax, {user_data_sel_16:x}
-                mov ds, ax
-                mov es, ax
-                mov fs, ax
-                mov gs, ax
-
-                // Push values for IRET (in reverse order)
-                push {user_data_sel}        // SS
-                push {user_stack_ptr}       // RSP
-                push 0x202                  // RFLAGS (interrupts enabled)
-                push {user_code_sel}        // CS
-                push {user_ip}              // RIP
-
-                // Switch to user mode
-                iretq
-                ",
-                user_data_sel_16 = in(reg) (user_data_sel as u16),
-                user_data_sel = in(reg) user_data_sel,
-                user_stack_ptr = in(reg) process.stack_pointer.as_u64(),
-                user_code_sel = in(reg) user_code_sel,
-                user_ip = in(reg) process.instruction_pointer.as_u64(),
-                options(noreturn)
-            );
-        }
-    }
-    fn perform_kernel_context_switch(&mut self, pid: u32) {
-        // Get the kernel process to switch to
-        if let Some(process) = self.get_process(pid) {
-            serial_println!("Performing kernel context switch to process {}", pid);
-
-            // For kernel processes, we don't switch page tables, just jump to the entry point
-            // This is essentially a function call within kernel space
-            self.switch_to_kernel_mode_direct(process);
-
-            // After the kernel process function returns, mark it as ready for next scheduling
-            if let Some(process_mut) = self.processes.iter_mut().find(|p| p.pid == pid) {
-                if process_mut.state == ProcessState::Running {
-                    process_mut.state = ProcessState::Ready;
-                }
-            }
-        } else {
-            serial_println!("Kernel process {} not found for context switch", pid);
-        }
-    }
-
-    fn switch_to_kernel_mode_direct(&self, process: &Process) {
-        serial_println!("Switching to kernel process {}", process.pid);
-        serial_println!(
-            "Entry point: {:?}, Stack: {:?}",
-            process.instruction_pointer,
-            process.stack_pointer
-        );
-
-        // For kernel processes, we perform a direct call to the entry point
-        // The process should be designed to yield voluntarily by returning from the function
-        let entry_point: extern "C" fn() =
-            unsafe { core::mem::transmute(process.instruction_pointer.as_ptr::<u8>()) };
-
-        // Call the kernel process entry point
-        entry_point();
-
-        // After the function returns, the process has yielded
-        serial_println!("Kernel process {} yielded", process.pid);
-
-        // Mark the process as ready again so it can be scheduled later
-        // Note: We need to find and update the process state
-        // This is a bit tricky since we're in an immutable borrow context
-        // We'll let the scheduler handle this in the next scheduling round
     }
 
     pub fn get_current_process(&self) -> Option<&Process> {
@@ -820,20 +679,17 @@ pub fn switch_to_user_mode(process: &Process, physical_memory_offset: VirtAddr) 
 }
 
 // Main scheduling function called by timer interrupt
-pub fn schedule() {
+pub fn schedule() -> ! {
     // Only schedule if we're not already in a critical section
     if let Some(mut pm) = PROCESS_MANAGER.try_lock() {
         if let Some(next_pid) = pm.get_next_ready_process() {
             // Only switch if it's different from current process
-            if next_pid != pm.current_pid {
-                pm.context_switch_to(next_pid);
-            } else {
-                serial_println!(
-                    "Same process already running, current PID: {}, next PID: {}",
-                    pm.current_pid,
-                    next_pid
-                );
-            }
+                let mut process = pm.get_process(next_pid).unwrap().clone();
+                pm.current_pid = next_pid;
+
+                drop(pm);
+
+                context_switch_to(&mut process);
         } else {
             // No ready processes, switch back to kernel
             if pm.current_pid != 0 {
@@ -843,10 +699,15 @@ pub fn schedule() {
                 }
                 pm.current_pid = 0;
             }
+
+            loop {}
+
         }
     } else {
         // If we can't get the lock, skip this scheduling round to avoid deadlock
         serial_println!("Failed to acquire PROCESS_MANAGER lock, skipping scheduling");
+
+        loop {}
     }
 }
 
@@ -870,42 +731,118 @@ pub fn queue_example_program(
     }
 }
 
-// Function to queue the long-running process
-// pub fn queue_long_running_process(
-//     frame_allocator: &mut BootInfoFrameAllocator,
-//     physical_memory_offset: VirtAddr,
-// ) -> Result<u32, ProcessError> {
-//     let mut process_manager = PROCESS_MANAGER.lock();
-//     let program = include_bytes!("../long_running.elf");
 
-//     match process_manager.create_process(program, frame_allocator, physical_memory_offset) {
-//         Ok(pid) => {
-//             serial_println!("Queued long-running process with PID: {}", pid);
-//             Ok(pid)
-//         }
-//         Err(e) => {
-//             serial_println!("Failed to queue long-running process: {:?}", e);
-//             Err(e)
-//         }
-//     }
-// }
+pub fn context_switch_to(process: &mut Process) -> ! {
+    serial_println!("Preparing to switch context to process");
 
-// // Function to queue the short-lived process
-// pub fn queue_short_lived_process(
-//     frame_allocator: &mut BootInfoFrameAllocator,
-//     physical_memory_offset: VirtAddr,
-// ) -> Result<u32, ProcessError> {
-//     let mut process_manager = PROCESS_MANAGER.lock();
-//     let program = include_bytes!("../short_lived.elf");
+    // Get the process and check if it's a kernel or user process
+        process.state = ProcessState::Running;
 
-//     match process_manager.create_process(program, frame_allocator, physical_memory_offset) {
-//         Ok(pid) => {
-//             serial_println!("Queued short-lived process with PID: {}", pid);
-//             Ok(pid)
-//         }
-//         Err(e) => {
-//             serial_println!("Failed to queue short-lived process: {:?}", e);
-//             Err(e)
-//         }
-//     }
-// }
+        match process.process_type {
+            ProcessType::Kernel => {
+                serial_println!("Context switching to kernel process ");
+                perform_kernel_context_switch(process);
+            }
+            ProcessType::User => {
+                serial_println!("Context switching to user process");
+                let page_table_frame = process.address_space.page_table_frame;
+                perform_context_switch(page_table_frame, process);
+            }
+        }
+}
+
+
+fn perform_kernel_context_switch(process: &mut Process) -> ! {
+    serial_println!("Performing kernel context switch to process");
+
+    serial_println!("Switching to kernel process {}", process.pid);
+    serial_println!(
+        "Entry point: {:?}, Stack: {:?}",
+        process.instruction_pointer,
+        process.stack_pointer
+    );
+
+    // For kernel processes, we perform a direct call to the entry point
+    // The process should be designed to yield voluntarily by returning from the function
+    let entry_point: extern "C" fn() =
+        unsafe { core::mem::transmute(process.instruction_pointer.as_ptr::<u8>()) };
+
+    loop {
+    // Call the kernel process entry point
+    entry_point();
+
+    // Give the CPU time to other processes
+
+    }
+
+    // After the function returns, the process has yielded
+    serial_println!("Kernel process {} yielded", process.pid);
+
+        process.state = ProcessState::Ready;
+}
+
+
+fn perform_context_switch(
+    page_table_frame: x86_64::structures::paging::PhysFrame,
+    process: &Process,
+) -> ! {
+    // Get the process to switch to
+        serial_println!("Performing full context switch to process {}", process.pid);
+
+        // Switch to the process's page table
+        unsafe {
+            asm!("mov cr3, {}", in(reg) page_table_frame.start_address().as_u64());
+        }
+
+        serial_println!("Switched to process page table");
+
+        // Now actually switch to user mode and start executing the process
+        switch_to_user_mode_direct(process);
+}
+
+fn switch_to_user_mode_direct(process: &Process) -> ! {
+    serial_println!("Switching to user mode for process {}", process.pid);
+    serial_println!(
+        "Entry point: {:?}, Stack: {:?}",
+        process.instruction_pointer,
+        process.stack_pointer
+    );
+
+    // Get user mode selectors from GDT - these should already have RPL=3
+    let user_code_sel = u64::from(crate::gdt::GDT.1.user_code.0) | 3;
+    let user_data_sel = u64::from(crate::gdt::GDT.1.user_data.0) | 3;
+
+    unsafe {
+        asm!(
+            "
+            // Set up user mode segments
+            mov ax, {user_data_sel_16:x}
+            mov ds, ax
+            mov es, ax
+            mov fs, ax
+            mov gs, ax
+
+            // Push values for IRET (in reverse order)
+            push {user_data_sel}        // SS
+            push {user_stack_ptr}       // RSP
+            push 0x202                  // RFLAGS (interrupts enabled)
+            push {user_code_sel}        // CS
+            push {user_ip}              // RIP
+
+            // Switch to user mode
+            iretq
+            ",
+            user_data_sel_16 = in(reg) (user_data_sel as u16),
+            user_data_sel = in(reg) user_data_sel,
+            user_stack_ptr = in(reg) process.stack_pointer.as_u64(),
+            user_code_sel = in(reg) user_code_sel,
+            user_ip = in(reg) process.instruction_pointer.as_u64(),
+            options(noreturn)
+        );
+    }
+}
+
+pub fn kill_current_process(exit_code: u8) {
+    let mut pm = PROCESS_MANAGER.lock();
+    pm.exit_current_process(exit_code);
+}
