@@ -154,6 +154,7 @@ pub fn init_global_executor() {
             let mut executor = Executor::new();
             executor.spawn(Task::new(crate::example_task()));
             executor.spawn(Task::new(crate::task::keyboard::print_keypresses()));
+            executor.spawn(Task::new(crate::task::mouse::print_states()));
             GLOBAL_EXECUTOR = Some(executor);
             EXECUTOR_INITIALIZED = true;
         }
@@ -165,7 +166,6 @@ pub fn init_global_executor() {
 extern "C" fn executor_entry_point() -> ! {
     crate::serial_println!("Executor kernel process started!");
     loop {
-        crate::serial_println!("Executor running batch...");
         unsafe {
             let executor_ptr = &raw mut GLOBAL_EXECUTOR;
             if let Some(executor) = &mut *executor_ptr {
@@ -174,7 +174,6 @@ extern "C" fn executor_entry_point() -> ! {
                 crate::serial_println!("Executor not initialized!");
             }
         }
-        crate::serial_println!("Executor batch complete, halting...");
         // Use a simple pause to avoid busy-waiting
         // This allows other processes to run while keeping this process alive
         enable_and_hlt();

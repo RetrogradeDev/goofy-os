@@ -1,7 +1,4 @@
-use bootloader_api::{
-    BootInfo,
-    info::{FrameBufferInfo, PixelFormat},
-};
+use bootloader_api::info::{FrameBuffer, FrameBufferInfo, PixelFormat};
 use conquer_once::spin::OnceCell;
 use core::{fmt, ptr};
 use font_constants::BACKUP_CHAR;
@@ -11,6 +8,7 @@ use noto_sans_mono_bitmap::{
 use spinning_top::Spinlock;
 
 pub static FRAMEBUFFER: OnceCell<Spinlock<FrameBufferWriter>> = OnceCell::uninit();
+pub static SCREEN_SIZE: OnceCell<(u16, u16)> = OnceCell::uninit();
 
 /// Prints to framebuffer
 #[macro_export]
@@ -222,17 +220,15 @@ impl fmt::Write for FrameBufferWriter {
     }
 }
 
-pub fn init(boot_info: &'static mut BootInfo) {
+pub fn init(frame: &'static mut FrameBuffer) {
+    SCREEN_SIZE.init_once(|| {
+        let info = frame.info();
+        (info.width as u16, info.height as u16)
+    });
+
     FRAMEBUFFER.init_once(|| {
-        let frame = boot_info.framebuffer.as_mut();
-        let info = match frame {
-            Some(ref v) => v.info(),
-            None => panic!("BOOTLOADER NOT CONFIGURED TO SUPPORT FRAMEBUFFER"),
-        };
-        let buffer = match frame {
-            Some(v) => v.buffer_mut(),
-            None => panic!("BOOTLOADER NOT CONFIGURED TO SUPPORT FRAMEBUFFER"),
-        };
+        let info = frame.info();
+        let buffer = frame.buffer_mut();
         spinning_top::Spinlock::new(FrameBufferWriter::new(buffer, info))
     });
 }

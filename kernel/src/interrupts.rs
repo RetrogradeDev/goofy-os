@@ -2,15 +2,21 @@ use crate::{hlt_loop, print, println, serial_println};
 use core::arch::naked_asm;
 use lazy_static::lazy_static;
 use pic8259::ChainedPics;
-use spin;
+use ps2_mouse::{Mouse, MouseState};
+use spin::{self, lazy::Lazy};
+use spinning_top::Spinlock;
 use x86_64::{
-    instructions::interrupts::enable,
+    instructions::{interrupts::enable, port::PortReadOnly},
     structures::idt::{InterruptDescriptorTable, InterruptStackFrame, PageFaultErrorCode},
 };
+
+pub static MOUSE: Lazy<Spinlock<Mouse>> = Lazy::new(|| Spinlock::new(Mouse::new()));
 
 pub const PIC_1_OFFSET: u8 = 32;
 pub const PIC_2_OFFSET: u8 = PIC_1_OFFSET + 8;
 pub const SYSCALL_INTERRUPT: u8 = 0x80;
+pub const KEYBOARD_INTERRUPT: u8 = PIC_1_OFFSET + 1;
+pub const MOUSE_INTERRUPT: u8 = PIC_1_OFFSET + 12;
 
 const PROCESS_EXITED: u64 = u64::MAX; // Special value to indicate process exit
 
@@ -21,7 +27,8 @@ pub static PICS: spin::Mutex<ChainedPics> =
 #[repr(u8)]
 pub enum InterruptIndex {
     Timer = PIC_1_OFFSET,
-    Keyboard,
+    Keyboard = KEYBOARD_INTERRUPT,
+    Mouse = MOUSE_INTERRUPT,
 }
 
 impl InterruptIndex {
@@ -44,6 +51,7 @@ lazy_static! {
 
         idt[InterruptIndex::Timer.as_u8()].set_handler_fn(timer_handler);
         idt[InterruptIndex::Keyboard.as_u8()].set_handler_fn(keyboard_interrupt_handler);
+        idt[InterruptIndex::Mouse.as_u8()].set_handler_fn(mouse_interrupt_handler);
 
         // Set up syscall handler with DPL 3 to allow user mode access
         // Use a custom gate instead of the x86-interrupt attribute
@@ -64,6 +72,29 @@ lazy_static! {
 
 pub fn init_idt() {
     IDT.load();
+}
+
+pub fn init_mouse() {
+    MOUSE.lock().init().unwrap();
+    MOUSE.lock().set_on_complete(on_complete);
+}
+
+// This will be fired when a packet is finished being processed.
+fn on_complete(mouse_state: MouseState) {
+    crate::task::mouse::add_mouse_state(mouse_state);
+}
+
+// An example interrupt based on https://os.phil-opp.com/hardware-interrupts/. The ps2 mouse is configured to fire
+// interrupts at PIC offset 12.
+extern "x86-interrupt" fn mouse_interrupt_handler(_stack_frame: InterruptStackFrame) {
+    let mut port = PortReadOnly::new(0x60);
+    let packet = unsafe { port.read() };
+    MOUSE.lock().process_packet(packet);
+
+    unsafe {
+        PICS.lock()
+            .notify_end_of_interrupt(InterruptIndex::Mouse.as_u8());
+    }
 }
 
 extern "x86-interrupt" fn general_protection_fault_handler(

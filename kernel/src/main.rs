@@ -10,14 +10,11 @@ extern crate alloc;
 
 use bootloader_api::{BootInfo, entry_point};
 use kernel::{
-    // framebuffer::clear_screen,
-    framebuffer::{FRAMEBUFFER, FrameBufferWriter},
     graphics::{
         draw_circle, draw_circle_outline, draw_line, draw_rect, draw_rect_outline, set_pixel,
     },
     memory::BootInfoFrameAllocator,
-    println,
-    serial_println,
+    println, serial_println,
 };
 
 use bootloader_api::config::{BootloaderConfig, Mapping};
@@ -38,18 +35,9 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     serial_println!("Booting goofy OS...");
     serial_println!("Bootloader information: {:#?}", boot_info);
 
-    FRAMEBUFFER.init_once(|| {
-        let frame = boot_info.framebuffer.as_mut();
-        let info = match frame {
-            Some(ref v) => v.info(),
-            None => panic!("BOOTLOADER NOT CONFIGURED TO SUPPORT FRAMEBUFFER"),
-        };
-        let buffer = match frame {
-            Some(v) => v.buffer_mut(),
-            None => panic!("BOOTLOADER NOT CONFIGURED TO SUPPORT FRAMEBUFFER"),
-        };
-        spinning_top::Spinlock::new(FrameBufferWriter::new(buffer, info))
-    });
+    serial_println!("Initializing framebuffer");
+    let frame = boot_info.framebuffer.as_mut().unwrap();
+    kernel::framebuffer::init(frame);
 
     set_pixel(10, 10, kernel::framebuffer::Color::new(255, 0, 0));
     draw_line(
@@ -127,12 +115,6 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     match kernel::process::queue_example_program(&mut frame_allocator, phys_mem_offset) {
         Ok(pid) => serial_println!("Successfully queued process with PID: {}", pid),
         Err(e) => serial_println!("Failed to queue process: {:?}", e),
-    }
-
-    // Load the simple test process
-    match kernel::process::queue_example_program(&mut frame_allocator, phys_mem_offset) {
-        Ok(pid) => serial_println!("Successfully queued simple process with PID: {}", pid),
-        Err(e) => serial_println!("Failed to queue simple process: {:?}", e),
     }
 
     // Some tests for the heap allocator

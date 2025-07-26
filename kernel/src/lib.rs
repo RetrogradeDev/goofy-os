@@ -27,6 +27,8 @@ pub mod task;
 
 use bootloader_api::config::{BootloaderConfig, Mapping};
 
+use crate::interrupts::init_mouse;
+
 pub static BOOTLOADER_CONFIG: BootloaderConfig = {
     let mut config = BootloaderConfig::new_default();
     config.mappings.physical_memory = Some(Mapping::Dynamic);
@@ -43,6 +45,8 @@ pub fn init(physical_memory_offset: x86_64::VirtAddr) {
     interrupts::init_idt();
     serial_println!("Initializing GDT...");
     gdt::init();
+    serial_println!("Initializing mouse input...");
+    init_mouse();
     serial_println!("Initializing PICs...");
     unsafe { interrupts::PICS.lock().initialize() };
     serial_println!("Enabling interrupts...");

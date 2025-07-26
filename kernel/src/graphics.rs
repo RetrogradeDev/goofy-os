@@ -1,4 +1,7 @@
-use crate::framebuffer::{Color, FRAMEBUFFER};
+use crate::{
+    framebuffer::{Color, FRAMEBUFFER},
+    serial_println,
+};
 
 pub fn set_pixel(x: usize, y: usize, color: Color) {
     FRAMEBUFFER
@@ -73,6 +76,7 @@ pub fn draw_rect(top_left: (usize, usize), bottom_right: (usize, usize), color: 
 }
 
 pub fn draw_circle(center: (usize, usize), radius: usize, color: Color) {
+    serial_println!("Drawing circle at {:?}", center);
     FRAMEBUFFER.get().map(|fb| {
         let mut fb = fb.lock();
         let (cx, cy) = center;
