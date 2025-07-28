@@ -3,14 +3,12 @@
 
 #[unsafe(no_mangle)]
 pub extern "C" fn _start() -> ! {
-    // Very simple process that just exits immediately
-
-    // Exit with status 0
+    // Simple exit syscall - just exit with code 42
     unsafe {
         core::arch::asm!(
             "mov rax, 60", // syscall number for exit
-            "mov rdi, 0",  // exit status
-            "int 0x80",    // system call
+            "mov rdi, 42", // exit code
+            "syscall",     // use int 0x80 instead of syscall instruction
             options(noreturn)
         );
     }

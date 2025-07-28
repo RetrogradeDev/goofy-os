@@ -35,9 +35,9 @@ lazy_static! {
         let mut gdt = GlobalDescriptorTable::new();
         let code = gdt.append(Descriptor::kernel_code_segment());
         let data = gdt.append(Descriptor::kernel_data_segment());
-        let tss = gdt.append(Descriptor::tss_segment(&TSS));
         let user_code = gdt.append(Descriptor::user_code_segment());
         let user_data = gdt.append(Descriptor::user_data_segment());
+        let tss = gdt.append(Descriptor::tss_segment(&TSS));
 
         (
             gdt,
@@ -53,8 +53,8 @@ lazy_static! {
 }
 
 pub struct Selectors {
-    code: SegmentSelector,
-    data: SegmentSelector,
+    pub code: SegmentSelector,
+    pub data: SegmentSelector,
     tss: SegmentSelector,
     pub user_code: SegmentSelector,
     pub user_data: SegmentSelector,

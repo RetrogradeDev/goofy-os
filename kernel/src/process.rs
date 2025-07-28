@@ -564,8 +564,14 @@ pub fn schedule() -> ! {
     // Only schedule if we're not already in a critical section
     if let Some(mut pm) = PROCESS_MANAGER.try_lock() {
         if let Some(next_pid) = pm.get_next_ready_process() {
-            // Only switch if it's different from current process
+            // Clear the current process
+            let current_pid = pm.current_pid;
+            if let Some(current_process) = pm.get_process_mut(current_pid) {
+                current_process.state = ProcessState::Ready;
+            }
+
             let mut process = pm.get_process(next_pid).unwrap().clone();
+            process.state = ProcessState::Running;
             pm.current_pid = next_pid;
 
             drop(pm);
@@ -597,7 +603,7 @@ pub fn queue_example_program(
     physical_memory_offset: VirtAddr,
 ) -> Result<u32, ProcessError> {
     let mut process_manager = PROCESS_MANAGER.lock();
-    let program = include_bytes!("../hello.elf");
+    let program = include_bytes!("../test.elf");
 
     match process_manager.create_process(program, frame_allocator, physical_memory_offset) {
         Ok(pid) => {
@@ -615,7 +621,7 @@ pub fn context_switch_to(process: &mut Process) -> ! {
     serial_println!("Preparing to switch context to process");
 
     // Get the process and check if it's a kernel or user process
-    process.state = ProcessState::Running;
+    // process.state = ProcessState::Running;
 
     match process.process_type {
         ProcessType::Kernel => {
@@ -649,19 +655,33 @@ fn perform_kernel_context_switch(process: &mut Process) -> ! {
         asm!("mov cr3, {}", in(reg) kernel_cr3);
         x86_64::instructions::tlb::flush_all();
 
-        // Restore register state and switch to the kernel process
-        // First set up the stack pointer (ensure 16-byte alignment)
+        // Set up proper interrupt return frame for kernel process
         let aligned_stack = process.stack_pointer.as_u64() & !0xf;
         let entry_point = process.instruction_pointer.as_u64();
 
-        // Use a simpler approach that doesn't require so many registers
+        // Get kernel selectors
+        let kernel_code_sel = crate::gdt::GDT.1.code.0 as u64;
+        let kernel_data_sel = crate::gdt::GDT.1.data.0 as u64;
+
         asm!(
-            // Set up stack pointer with proper alignment
-            "mov rsp, {stack}",
-            // Jump to the entry point
-            "jmp {entry}",
-            stack = in(reg) aligned_stack,
-            entry = in(reg) entry_point,
+            // Switch to a temporary stack to set up the interrupt frame
+            "mov rsp, {temp_stack}",
+
+            // Push interrupt return frame (in reverse order for iretq)
+            "push {ss}",           // Stack segment
+            "push {rsp}",          // Stack pointer
+            "push 0x202",          // RFLAGS (interrupts enabled)
+            "push {cs}",           // Code segment
+            "push {rip}",          // Instruction pointer
+
+            // Use iretq to "return" to the kernel process
+            "iretq",
+
+            temp_stack = in(reg) aligned_stack - 64, // Temporary stack space
+            ss = in(reg) kernel_data_sel,
+            rsp = in(reg) aligned_stack,
+            cs = in(reg) kernel_code_sel,
+            rip = in(reg) entry_point,
             options(noreturn)
         );
     }
@@ -693,9 +713,9 @@ fn switch_to_user_mode_direct(process: &Process) -> ! {
         process.stack_pointer
     );
 
-    // Get user mode selectors from GDT - these should already have RPL=3
-    let user_code_sel = u64::from(crate::gdt::GDT.1.user_code.0) | 3;
-    let user_data_sel = u64::from(crate::gdt::GDT.1.user_data.0) | 3;
+    // Get user mode selectors from GDT - construct with RPL=3
+    let user_code_sel = u64::from((crate::gdt::GDT.1.user_code.index() << 3) | 3);
+    let user_data_sel = u64::from((crate::gdt::GDT.1.user_data.index() << 3) | 3);
 
     unsafe {
         asm!(

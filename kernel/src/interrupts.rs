@@ -1,12 +1,15 @@
 use crate::{hlt_loop, print, println, serial_println};
-use core::arch::naked_asm;
+use core::arch::asm;
 use lazy_static::lazy_static;
 use pic8259::ChainedPics;
 use ps2_mouse::{Mouse, MouseState};
 use spin::{self, lazy::Lazy};
 use spinning_top::Spinlock;
 use x86_64::{
-    instructions::{interrupts::enable, port::PortReadOnly},
+    instructions::{
+        interrupts::{disable, enable},
+        port::PortReadOnly,
+    },
     structures::idt::{InterruptDescriptorTable, InterruptStackFrame, PageFaultErrorCode},
 };
 
@@ -155,27 +158,8 @@ extern "x86-interrupt" fn timer_handler(_stack_frame: InterruptStackFrame) {
             .notify_end_of_interrupt(InterruptIndex::Timer.as_u8());
     }
 
-    // Implement preemptive scheduling
-    // Check if we should schedule a different process
-    let mut pm = crate::process::PROCESS_MANAGER.lock();
-    if pm.has_running_processes() {
-        let current_pid = pm.get_current_pid();
-        let next_pid = pm.get_next_ready_process();
-
-        // If we have a next process and it's different from current, schedule it
-        if let Some(next) = next_pid {
-            if next != current_pid {
-                drop(pm);
-                // Call scheduler to switch to the next process
-                crate::process::schedule();
-            }
-        } else if current_pid != 0 {
-            // No ready processes, but we're not in kernel mode
-            // Switch back to kernel idle
-            drop(pm);
-            crate::process::schedule();
-        }
-    }
+    // Switch to the next task
+    crate::process::schedule();
 }
 
 extern "x86-interrupt" fn keyboard_interrupt_handler(_stack_frame: InterruptStackFrame) {
@@ -191,50 +175,56 @@ extern "x86-interrupt" fn keyboard_interrupt_handler(_stack_frame: InterruptStac
     }
 }
 
-// Debug version to figure out correct register values
-// TODO
-#[unsafe(naked)]
-unsafe extern "C" fn syscall_handler_asm() {
-    naked_asm!(
-        // Save registers
-        "push rax",
-        "push rbx",
-        "push rcx",
-        "push rdx",
-        "push rsi",
-        "push rdi",
-        "push rbp",
+pub fn syscall_handler_asm() {
+    unsafe {
+        asm!(
+            // Save registers (don't save RCX and R11 - syscall uses these for return)
+                    "push rax",
+                    "push rbx",
+                    "push rdx",
+                    "push rsi",
+                    "push rdi",
+                    "push rbp",
+                    "push r8",
+                    "push r9",
+                    "push r10",
 
-        // Pass register values as arguments to debug function
-        // Move original register values (now on stack) to argument registers
-        "mov rdi, [rsp + 48]",  // original rax (syscall number)
-        "mov rsi, [rsp + 8]",   // original rdi (arg1)
-        "mov rdx, [rsp + 16]",  // original rsi (arg2)
-        "mov rcx, [rsp + 24]",  // original rdx (arg3)
+                    // Set up arguments for Rust function
+                    // rax = syscall number (already in rax)
+                    // rdi = arg1 (already in rdi)
+                    // rsi = arg2 (already in rsi)
+                    // rdx = arg3 (already in rdx)
+                    // So we need to move them to the right positions:
+                    "mov r8, rdx",   // Save rdx (arg3)
+                    "mov r9, rsi",   // Save rsi (arg2)
+                    "mov r10, rdi",  // Save rdi (arg1)
+                    "mov rdi, rax",  // syscall number -> first arg
+                    "mov rsi, r10",  // arg1 -> second arg
+                    "mov rdx, r9",   // arg2 -> third arg
+                    "mov rcx, r8",   // arg3 -> fourth arg
 
-        "call {}",
+                    "call {}",
 
-        // Store return value in original rax position
-        "mov [rsp + 48], rax",
+                    // Restore registers
+                    "pop r10",
+                    "pop r9",
+                    "pop r8",
+                    "pop rbp",
+                    "pop rdi",
+                    "pop rsi",
+                    "pop rdx",
+                    "pop rbx",
+                    // Don't pop rax - it contains the return value
 
-        // Restore registers
-        "pop rbp",
-        "pop rdi",
-        "pop rsi",
-        "pop rdx",
-        "pop rcx",
-        "pop rbx",
-        "pop rax",
+                    // RCX and R11 are already set by syscall instruction
+                    // RCX = return RIP, R11 = RFLAGS
+                    // Return to user mode
+                    "sysretq",
 
-        // Pop the user RIP, increment it, and push it back.
-        "pop r11",
-        "add r11, 2",
-        "push r11",
-
-        "iretq",
-
-        sym syscall_handler_rust_debug
-    );
+            sym syscall_handler_rust_debug,
+            options(noreturn)
+        );
+    }
 }
 
 // TODO Debug version to figure out correct register values
@@ -255,18 +245,13 @@ extern "C" fn syscall_handler_rust_debug(rax: u64, rdi: u64, rsi: u64, rdx: u64)
     if result == PROCESS_EXITED {
         serial_println!("Marking process as terminated...");
 
-        crate::process::kill_current_process(rdi as u8);
+        disable();
 
-        // Spin loop
-        // for _ in 0..1_000_000_000 {
-        //     unsafe { asm!("nop") };
-        // }
+        crate::process::kill_current_process(rdi as u8);
 
         serial_println!("Process marked for exit, returning to scheduler...");
 
         enable(); // Just to be sure
-
-        //hlt();
 
         crate::process::schedule();
     }

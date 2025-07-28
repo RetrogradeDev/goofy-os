@@ -10,15 +10,24 @@ extern crate alloc;
 
 use bootloader_api::{BootInfo, entry_point};
 use kernel::{
+    gdt::GDT,
     graphics::{
         draw_circle, draw_circle_outline, draw_line, draw_rect, draw_rect_outline, set_pixel,
     },
+    interrupts::syscall_handler_asm,
     memory::BootInfoFrameAllocator,
     println, serial_println,
 };
 
 use bootloader_api::config::{BootloaderConfig, Mapping};
-use x86_64::instructions::interrupts;
+use x86_64::{
+    instructions::interrupts,
+    registers::{
+        control::{Efer, EferFlags},
+        model_specific::{LStar, Msr, SFMask, Star},
+        rflags::RFlags,
+    },
+};
 
 pub static BOOTLOADER_CONFIG: BootloaderConfig = {
     let mut config = BootloaderConfig::new_default();
@@ -38,6 +47,14 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     serial_println!("Initializing framebuffer");
     let frame = boot_info.framebuffer.as_mut().unwrap();
     kernel::framebuffer::init(frame);
+
+    // Enable syscalls
+    unsafe {
+        Efer::update(|e| *e |= EferFlags::SYSTEM_CALL_EXTENSIONS);
+        LStar::write(VirtAddr::new(syscall_handler_asm as u64));
+        SFMask::write(RFlags::INTERRUPT_FLAG);
+        Star::write(GDT.1.code, GDT.1.data, GDT.1.user_code, GDT.1.user_data);
+    }
 
     set_pixel(10, 10, kernel::framebuffer::Color::new(255, 0, 0));
     draw_line(
@@ -156,4 +173,9 @@ fn panic(info: &PanicInfo) -> ! {
 #[panic_handler]
 fn panic(info: &PanicInfo) -> ! {
     kernel::test_panic_handler(info)
+}
+
+fn syscall_entry_point() {
+    // Implement syscall entry point logic here
+    serial_println!("Ello");
 }
