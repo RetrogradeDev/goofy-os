@@ -1,4 +1,4 @@
-use core::arch::asm;
+use core::arch::{asm, naked_asm};
 
 use alloc::vec::Vec;
 use lazy_static::lazy_static;
@@ -60,27 +60,27 @@ impl Process {
     }
 }
 
-#[repr(C)]
+#[repr(C, align(8))]
 #[derive(Clone, Copy)]
 pub struct RegisterState {
-    pub rax: u64,
-    pub rbx: u64,
-    pub rcx: u64,
-    pub rdx: u64,
+    pub r15: u64,
+    pub r14: u64,
+    pub r13: u64,
+    pub r12: u64,
+    pub r11: u64,
+    pub r10: u64,
+    pub r9: u64,
+    pub r8: u64,
     pub rsi: u64,
     pub rdi: u64,
     pub rbp: u64,
-    pub rsp: u64,
-    pub r8: u64,
-    pub r9: u64,
-    pub r10: u64,
-    pub r11: u64,
-    pub r12: u64,
-    pub r13: u64,
-    pub r14: u64,
-    pub r15: u64,
-    pub rflags: u64,
+    pub rdx: u64,
+    pub rcx: u64,
+    pub rbx: u64,
+    pub rax: u64,
     pub rip: u64,
+    pub rflags: u64,
+    pub rsp: u64,
 }
 
 pub struct ProcessManager {
@@ -463,29 +463,6 @@ impl ProcessManager {
             .any(|p| p.state != ProcessState::Terminated)
     }
 
-    /// Kills the process with the given PID and cleans up resources
-    pub fn kill_process(&mut self, pid: u32) -> Result<(), ProcessError> {
-        if let Some(index) = self.processes.iter().position(|p| p.pid == pid) {
-            serial_println!("Killing process with PID {}", pid);
-
-            // Clean up any resources associated with the process
-            let process = &mut self.processes[index];
-            process.cleanup_resources();
-
-            serial_println!("Process with PID {} is in state {:?}", pid, process.state);
-
-            // Finally remove the process from the list
-            self.processes.remove(index);
-
-            serial_println!("Process with PID {} killed successfully", pid);
-
-            Ok(())
-        } else {
-            serial_println!("Process with PID {} not found", pid);
-            Err(ProcessError::InvalidStateTransition)
-        }
-    }
-
     pub fn set_current_pid(&mut self, pid: u32) {
         self.current_pid = pid;
     }
@@ -500,26 +477,6 @@ impl ProcessManager {
 
     pub fn get_process_mut(&mut self, pid: u32) -> Option<&mut Process> {
         self.processes.iter_mut().find(|p| p.pid == pid)
-    }
-
-    pub fn exit_current_process(&mut self, exit_code: u8) {
-        serial_println!("Exiting current process with exit code {}", exit_code);
-
-        // Switch back to kernel page table BEFORE any cleanup
-        unsafe {
-            asm!("mov cr3, {}", in(reg) self.kernel_cr3);
-            serial_println!(
-                "Switched back to kernel page table (CR3: 0x{:x})",
-                self.kernel_cr3
-            );
-        }
-
-        self.kill_process(self.current_pid)
-            .unwrap_or_else(|e| serial_println!("Failed to exit process: {:?}", e));
-
-        serial_println!("Current process exited");
-
-        self.current_pid = 0; // Reset current PID after exit
     }
 
     pub fn get_next_ready_process(&mut self) -> Option<u32> {
@@ -598,12 +555,12 @@ pub fn schedule() -> ! {
 }
 
 // Function to queue a process without immediately running it
-pub fn queue_example_program(
+pub fn queue_user_program(
+    program: &[u8],
     frame_allocator: &mut BootInfoFrameAllocator,
     physical_memory_offset: VirtAddr,
 ) -> Result<u32, ProcessError> {
     let mut process_manager = PROCESS_MANAGER.lock();
-    let program = include_bytes!("../test.elf");
 
     match process_manager.create_process(program, frame_allocator, physical_memory_offset) {
         Ok(pid) => {
@@ -721,11 +678,11 @@ fn switch_to_user_mode_direct(process: &Process) -> ! {
         asm!(
             "
             // Set up user mode segments
-            mov ax, {user_data_sel_16:x}
-            mov ds, ax
-            mov es, ax
-            mov fs, ax
-            mov gs, ax
+            // mov ax, {user_data_sel_16:x}
+            // mov ds, ax
+            // mov es, ax
+            // mov fs, ax
+            // mov gs, ax
 
             // Push values for IRET (in reverse order)
             push {user_data_sel}        // SS
@@ -747,7 +704,78 @@ fn switch_to_user_mode_direct(process: &Process) -> ! {
     }
 }
 
-pub fn kill_current_process(exit_code: u8) {
+pub fn queue_kernel_process(entry_point: fn() -> !) {
     let mut pm = PROCESS_MANAGER.lock();
-    pm.exit_current_process(exit_code);
+    let entry_point_addr = VirtAddr::new(entry_point as *const () as u64);
+
+    // Allocate a proper kernel stack
+    const KERNEL_STACK_SIZE: usize = 4096 * 4; // 16KB stack
+    static mut KERNEL_STACK: [u8; KERNEL_STACK_SIZE] = [0; KERNEL_STACK_SIZE];
+
+    let kernel_stack = VirtAddr::from_ptr(&raw const KERNEL_STACK) + KERNEL_STACK_SIZE as u64;
+
+    match pm.create_kernel_process(entry_point_addr, kernel_stack) {
+        Ok(pid) => {
+            serial_println!("Created executor kernel process with PID: {}", pid);
+        }
+        Err(e) => serial_println!("Failed to create executor kernel process: {:?}", e),
+    }
+}
+
+pub fn kill_process(process: &mut Process) -> Result<(), ProcessError> {
+    match process.process_type {
+        ProcessType::Kernel => {
+            // TODO: Figure out what to clean up
+            process.stack_pointer = VirtAddr::zero();
+            process.instruction_pointer = VirtAddr::zero();
+            // process.address_space.cleanup();
+        }
+        ProcessType::User => {
+            process.cleanup_resources();
+        }
+    }
+
+    serial_println!("Process killed successfully");
+
+    Ok(())
+}
+
+pub fn exit_current_process(exit_code: u8) {
+    serial_println!("Exiting current process with exit code {}", exit_code);
+
+    let mut pm = PROCESS_MANAGER
+        .try_lock()
+        .expect("Failed to acquire PROCESS_MANAGER lock");
+
+    // Switch back to kernel page table BEFORE any cleanup
+    unsafe {
+        asm!("mov cr3, {}", in(reg) pm.kernel_cr3);
+        serial_println!(
+            "Switched back to kernel page table (CR3: 0x{:x})",
+            pm.kernel_cr3
+        );
+    }
+
+    let current_pid = pm.current_pid;
+    pm.current_pid = 0;
+
+    let index = pm
+        .processes
+        .iter()
+        .position(|p| p.pid == current_pid)
+        .expect("Current process not found");
+
+    let mut process = pm
+        .get_process_mut(current_pid)
+        .expect("No current process to exit")
+        .clone();
+
+    pm.processes.remove(index);
+
+    drop(pm); // Release the lock before calling cleanup
+
+    kill_process(&mut process)
+        .unwrap_or_else(|e| serial_println!("Failed to exit process: {:?}", e));
+
+    serial_println!("Current process exited");
 }

@@ -20,6 +20,7 @@ pub mod framebuffer;
 pub mod gdt;
 pub mod graphics;
 pub mod interrupts;
+pub mod kernel_processes;
 pub mod memory;
 pub mod process;
 pub mod serial;
@@ -27,7 +28,7 @@ pub mod task;
 
 use bootloader_api::config::{BootloaderConfig, Mapping};
 
-use crate::interrupts::init_mouse;
+use crate::{interrupts::init_mouse, kernel_processes::keyboard::init_scancode_queue};
 
 pub static BOOTLOADER_CONFIG: BootloaderConfig = {
     let mut config = BootloaderConfig::new_default();

@@ -7,7 +7,7 @@ use spin::{self, lazy::Lazy};
 use spinning_top::Spinlock;
 use x86_64::{
     instructions::{
-        interrupts::{disable, enable},
+        interrupts::{disable, enable, without_interrupts},
         port::PortReadOnly,
     },
     structures::idt::{InterruptDescriptorTable, InterruptStackFrame, PageFaultErrorCode},
@@ -92,7 +92,12 @@ fn on_complete(mouse_state: MouseState) {
 extern "x86-interrupt" fn mouse_interrupt_handler(_stack_frame: InterruptStackFrame) {
     let mut port = PortReadOnly::new(0x60);
     let packet = unsafe { port.read() };
-    MOUSE.lock().process_packet(packet);
+
+    // I know this is a bad practice but we are sort of forced to do this here
+    // I spent 3h trying to do it otherwise but none of the solutions worked.
+    without_interrupts(|| {
+        MOUSE.lock().process_packet(packet);
+    });
 
     unsafe {
         PICS.lock()
@@ -247,7 +252,7 @@ extern "C" fn syscall_handler_rust_debug(rax: u64, rdi: u64, rsi: u64, rdx: u64)
 
         disable();
 
-        crate::process::kill_current_process(rdi as u8);
+        crate::process::exit_current_process(rdi as u8);
 
         serial_println!("Process marked for exit, returning to scheduler...");
 

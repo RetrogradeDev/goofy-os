@@ -15,8 +15,11 @@ use kernel::{
         draw_circle, draw_circle_outline, draw_line, draw_rect, draw_rect_outline, set_pixel,
     },
     interrupts::syscall_handler_asm,
+    kernel_processes::keyboard::init_scancode_queue,
     memory::BootInfoFrameAllocator,
-    println, serial_println,
+    println,
+    process::queue_kernel_process,
+    serial_println,
 };
 
 use bootloader_api::config::{BootloaderConfig, Mapping};
@@ -100,39 +103,7 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     println!("Hello World{}", "!");
 
     // Initialize the global executor
-    kernel::task::executor::init_global_executor();
-
-    // Create the executor as a kernel process FIRST
-    {
-        use kernel::process::PROCESS_MANAGER;
-        use x86_64::VirtAddr;
-
-        let mut pm = PROCESS_MANAGER.lock();
-        let executor_entry = kernel::task::executor::get_executor_entry_point();
-        let executor_entry_addr = VirtAddr::new(executor_entry as *const () as u64);
-
-        // Allocate a proper kernel stack
-        const KERNEL_STACK_SIZE: usize = 4096 * 4; // 16KB stack
-        static mut KERNEL_STACK: [u8; KERNEL_STACK_SIZE] = [0; KERNEL_STACK_SIZE];
-
-        let kernel_stack = VirtAddr::from_ptr(&raw const KERNEL_STACK) + KERNEL_STACK_SIZE as u64;
-
-        match pm.create_kernel_process(executor_entry_addr, kernel_stack) {
-            Ok(pid) => {
-                serial_println!("Created executor kernel process with PID: {}", pid);
-            }
-            Err(e) => serial_println!("Failed to create executor kernel process: {:?}", e),
-        }
-
-        // Now release the lock before proceeding to the next step
-    }
-
-    // Queue the example program instead of running it directly
-    // This allows the kernel to continue while the process runs via timer scheduling
-    match kernel::process::queue_example_program(&mut frame_allocator, phys_mem_offset) {
-        Ok(pid) => serial_println!("Successfully queued process with PID: {}", pid),
-        Err(e) => serial_println!("Failed to queue process: {:?}", e),
-    }
+    // kernel::task::executor::init_global_executor();
 
     // Some tests for the heap allocator
     let heap_value = alloc::boxed::Box::new(41);
@@ -142,6 +113,20 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     println!("heap_vector at {:p}", heap_vector.as_ptr());
     let heap_string = alloc::string::String::from("Hello from the heap!");
     println!("heap_string at {:p}", heap_string.as_ptr());
+
+    init_scancode_queue();
+
+    let example_entry = kernel::kernel_processes::example::entry_point;
+    let keyboard_entry = kernel::kernel_processes::keyboard::print_keypresses;
+    queue_kernel_process(example_entry);
+    queue_kernel_process(keyboard_entry);
+
+    let program = include_bytes!("../test.elf");
+
+    match kernel::process::queue_user_program(program, &mut frame_allocator, phys_mem_offset) {
+        Ok(pid) => serial_println!("Successfully queued process with PID: {}", pid),
+        Err(e) => serial_println!("Failed to queue process: {:?}", e),
+    }
 
     #[cfg(test)]
     test_main();
