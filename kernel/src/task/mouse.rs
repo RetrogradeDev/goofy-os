@@ -102,7 +102,7 @@ impl Stream for StateStream {
     }
 }
 
-pub async fn print_states() {
+pub async fn print_mouse_states() {
     let mut states = StateStream::new();
 
     while let Some(state) = states.next().await {

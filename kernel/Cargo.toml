@@ -32,11 +32,3 @@ features = [
     # required for the fallback char '�'
     "unicode-specials",
 ]
-
-[[test]]
-name = "should_panic"
-harness = false
-
-[[test]]
-name = "stack_overflow"
-harness = false

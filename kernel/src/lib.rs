@@ -15,20 +15,19 @@ use exit::{QemuExitCode, exit_qemu};
 extern crate alloc;
 
 pub mod allocator;
+pub mod drawbuffer;
 pub mod exit;
 pub mod framebuffer;
 pub mod gdt;
 pub mod graphics;
 pub mod interrupts;
-pub mod kernel_processes;
 pub mod memory;
-pub mod process;
 pub mod serial;
 pub mod task;
 
 use bootloader_api::config::{BootloaderConfig, Mapping};
 
-use crate::{interrupts::init_mouse, kernel_processes::keyboard::init_scancode_queue};
+use crate::interrupts::init_mouse;
 
 pub static BOOTLOADER_CONFIG: BootloaderConfig = {
     let mut config = BootloaderConfig::new_default();
@@ -48,6 +47,7 @@ pub fn init(physical_memory_offset: x86_64::VirtAddr) {
     gdt::init();
     serial_println!("Initializing mouse input...");
     init_mouse();
+
     serial_println!("Initializing PICs...");
     unsafe { interrupts::PICS.lock().initialize() };
     serial_println!("Enabling interrupts...");

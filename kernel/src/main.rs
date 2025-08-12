@@ -10,27 +10,16 @@ extern crate alloc;
 
 use bootloader_api::{BootInfo, entry_point};
 use kernel::{
-    gdt::GDT,
     graphics::{
         draw_circle, draw_circle_outline, draw_line, draw_rect, draw_rect_outline, set_pixel,
     },
-    interrupts::syscall_handler_asm,
-    kernel_processes::keyboard::init_scancode_queue,
     memory::BootInfoFrameAllocator,
-    println,
-    process::queue_kernel_process,
-    serial_println,
+    println, serial_println,
+    task::{Task, desktop::run_desktop, keyboard::print_keypresses, mouse::print_mouse_states},
 };
 
 use bootloader_api::config::{BootloaderConfig, Mapping};
-use x86_64::{
-    instructions::interrupts,
-    registers::{
-        control::{Efer, EferFlags},
-        model_specific::{LStar, Msr, SFMask, Star},
-        rflags::RFlags,
-    },
-};
+use x86_64::instructions::interrupts;
 
 pub static BOOTLOADER_CONFIG: BootloaderConfig = {
     let mut config = BootloaderConfig::new_default();
@@ -50,14 +39,6 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     serial_println!("Initializing framebuffer");
     let frame = boot_info.framebuffer.as_mut().unwrap();
     kernel::framebuffer::init(frame);
-
-    // Enable syscalls
-    unsafe {
-        Efer::update(|e| *e |= EferFlags::SYSTEM_CALL_EXTENSIONS);
-        LStar::write(VirtAddr::new(syscall_handler_asm as u64));
-        SFMask::write(RFlags::INTERRUPT_FLAG);
-        Star::write(GDT.1.code, GDT.1.data, GDT.1.user_code, GDT.1.user_data);
-    }
 
     set_pixel(10, 10, kernel::framebuffer::Color::new(255, 0, 0));
     draw_line(
@@ -102,9 +83,6 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
 
     println!("Hello World{}", "!");
 
-    // Initialize the global executor
-    // kernel::task::executor::init_global_executor();
-
     // Some tests for the heap allocator
     let heap_value = alloc::boxed::Box::new(41);
     println!("heap_value at {:p}", heap_value);
@@ -114,35 +92,18 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     let heap_string = alloc::string::String::from("Hello from the heap!");
     println!("heap_string at {:p}", heap_string.as_ptr());
 
-    init_scancode_queue();
-
-    let example_entry = kernel::kernel_processes::example::entry_point;
-    let keyboard_entry = kernel::kernel_processes::keyboard::print_keypresses;
-    queue_kernel_process(example_entry);
-    queue_kernel_process(keyboard_entry);
-
-    let program = include_bytes!("../test.elf");
-
-    match kernel::process::queue_user_program(program, &mut frame_allocator, phys_mem_offset) {
-        Ok(pid) => serial_println!("Successfully queued process with PID: {}", pid),
-        Err(e) => serial_println!("Failed to queue process: {:?}", e),
-    }
-
     #[cfg(test)]
     test_main();
 
-    // {
-    //     use kernel::process::PROCESS_MANAGER;
-
-    //     let mut pm = PROCESS_MANAGER.lock();
-    //     let pid = 1;
-
-    //     pm.set_current_pid(pid);
-    // }
-
     // The kernel should continue running and let the scheduler handle task execution
     interrupts::enable();
-    kernel::hlt_loop();
+
+    // Initialize the global executor
+    let mut executor = kernel::task::executor::Executor::new();
+    executor.spawn(Task::new(print_keypresses()));
+    executor.spawn(Task::new(print_mouse_states()));
+    executor.spawn(Task::new(run_desktop()));
+    executor.run();
 }
 
 #[cfg(not(test))]
@@ -158,9 +119,4 @@ fn panic(info: &PanicInfo) -> ! {
 #[panic_handler]
 fn panic(info: &PanicInfo) -> ! {
     kernel::test_panic_handler(info)
-}
-
-fn syscall_entry_point() {
-    // Implement syscall entry point logic here
-    serial_println!("Ello");
 }
