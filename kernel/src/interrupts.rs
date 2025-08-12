@@ -153,7 +153,7 @@ extern "x86-interrupt" fn double_fault_handler(
     hlt_loop();
 }
 
-extern "x86-interrupt" fn timer_handler(_stack_frame: InterruptStackFrame) {
+extern "x86-interrupt" fn timer_handler(stack_frame: InterruptStackFrame) {
     print!(".");
     serial_println!("TIMER");
 
@@ -163,8 +163,8 @@ extern "x86-interrupt" fn timer_handler(_stack_frame: InterruptStackFrame) {
             .notify_end_of_interrupt(InterruptIndex::Timer.as_u8());
     }
 
-    // Switch to the next task
-    crate::process::schedule();
+    // Switch to the next task, passing the interrupt frame to save current process state
+    crate::process::schedule_with_frame(Some(&stack_frame));
 }
 
 extern "x86-interrupt" fn keyboard_interrupt_handler(_stack_frame: InterruptStackFrame) {

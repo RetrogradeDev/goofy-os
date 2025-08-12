@@ -1,10 +1,11 @@
-use core::arch::{asm, naked_asm};
+use core::arch::asm;
 
 use alloc::vec::Vec;
 use lazy_static::lazy_static;
 use spin::Mutex;
 use x86_64::{
     VirtAddr,
+    instructions::interrupts::without_interrupts,
     structures::paging::{FrameAllocator, PageTableFlags},
 };
 
@@ -45,6 +46,8 @@ pub struct Process {
     pub instruction_pointer: VirtAddr,
     // Saved register state
     pub registers: RegisterState,
+    // Flag to track if this process has valid saved register state
+    pub has_saved_state: bool,
 }
 
 impl Process {
@@ -61,7 +64,7 @@ impl Process {
 }
 
 #[repr(C, align(8))]
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub struct RegisterState {
     pub r15: u64,
     pub r14: u64,
@@ -83,6 +86,151 @@ pub struct RegisterState {
     pub rsp: u64,
 }
 
+impl RegisterState {
+    /// Create a new register state with default values for a new process
+    pub fn new() -> Self {
+        Self {
+            r15: 0,
+            r14: 0,
+            r13: 0,
+            r12: 0,
+            r11: 0,
+            r10: 0,
+            r9: 0,
+            r8: 0,
+            rsi: 0,
+            rdi: 0,
+            rbp: 0,
+            rdx: 0,
+            rcx: 0,
+            rbx: 0,
+            rax: 0,
+            rip: 0,
+            rflags: 0x202, // Default RFLAGS with interrupts enabled
+            rsp: 0,
+        }
+    }
+
+    /// Save the current CPU state into this register state
+    pub fn save_current_state(&mut self) {
+        unsafe {
+            // Save registers in chunks to avoid register pressure
+            asm!(
+                "mov {}, rax",
+                "mov {}, rbx",
+                "mov {}, rcx",
+                "mov {}, rdx",
+                out(reg) self.rax,
+                out(reg) self.rbx,
+                out(reg) self.rcx,
+                out(reg) self.rdx,
+            );
+
+            asm!(
+                "mov {}, rsi",
+                "mov {}, rdi",
+                "mov {}, rbp",
+                "mov {}, r8",
+                out(reg) self.rsi,
+                out(reg) self.rdi,
+                out(reg) self.rbp,
+                out(reg) self.r8,
+            );
+
+            asm!(
+                "mov {}, r9",
+                "mov {}, r10",
+                "mov {}, r11",
+                "mov {}, r12",
+                out(reg) self.r9,
+                out(reg) self.r10,
+                out(reg) self.r11,
+                out(reg) self.r12,
+            );
+
+            asm!(
+                "mov {}, r13",
+                "mov {}, r14",
+                "mov {}, r15",
+                "mov {}, rsp",
+                out(reg) self.r13,
+                out(reg) self.r14,
+                out(reg) self.r15,
+                out(reg) self.rsp,
+            );
+
+            asm!(
+                "pushfq",
+                "pop {}",
+                out(reg) self.rflags,
+            );
+        }
+    }
+}
+
+/// Save CPU state from interrupt context
+/// This function captures the complete CPU state during an interrupt
+pub fn save_process_state_from_interrupt() -> RegisterState {
+    let mut state = RegisterState::new();
+    unsafe {
+        // Save registers in chunks to avoid register pressure
+        asm!(
+            "mov {}, rax",
+            "mov {}, rbx",
+            "mov {}, rcx",
+            "mov {}, rdx",
+            out(reg) state.rax,
+            out(reg) state.rbx,
+            out(reg) state.rcx,
+            out(reg) state.rdx,
+        );
+
+        asm!(
+            "mov {}, rsi",
+            "mov {}, rdi",
+            "mov {}, rbp",
+            "mov {}, r8",
+            out(reg) state.rsi,
+            out(reg) state.rdi,
+            out(reg) state.rbp,
+            out(reg) state.r8,
+        );
+
+        asm!(
+            "mov {}, r9",
+            "mov {}, r10",
+            "mov {}, r11",
+            "mov {}, r12",
+            out(reg) state.r9,
+            out(reg) state.r10,
+            out(reg) state.r11,
+            out(reg) state.r12,
+        );
+
+        asm!(
+            "mov {}, r13",
+            "mov {}, r14",
+            "mov {}, r15",
+            out(reg) state.r13,
+            out(reg) state.r14,
+            out(reg) state.r15,
+        );
+
+        // Get flags
+        asm!(
+            "pushfq",
+            "pop {}",
+            out(reg) state.rflags,
+        );
+
+        // Get current stack pointer
+        asm!(
+            "mov {}, rsp",
+            out(reg) state.rsp,
+        );
+    }
+    state
+}
 pub struct ProcessManager {
     processes: Vec<Process>,
     current_pid: u32,
@@ -366,26 +514,13 @@ impl ProcessManager {
             address_space,
             stack_pointer,
             instruction_pointer,
-            registers: RegisterState {
-                rax: 0,
-                rbx: 0,
-                rcx: 0,
-                rdx: 0,
-                rsi: 0,
-                rdi: 0,
-                rbp: 0,
-                rsp: stack_pointer.as_u64(),
-                r8: 0,
-                r9: 0,
-                r10: 0,
-                r11: 0,
-                r12: 0,
-                r13: 0,
-                r14: 0,
-                r15: 0,
-                rflags: 0x202, // Default RFLAGS with interrupts enabled
-                rip: instruction_pointer.as_u64(),
+            registers: {
+                let mut regs = RegisterState::new();
+                regs.rsp = stack_pointer.as_u64();
+                regs.rip = instruction_pointer.as_u64();
+                regs
             },
+            has_saved_state: false,
         };
 
         let pid = self.next_pid;
@@ -421,26 +556,13 @@ impl ProcessManager {
             address_space: dummy_address_space,
             stack_pointer: stack_ptr,
             instruction_pointer: entry_point,
-            registers: RegisterState {
-                rax: 0,
-                rbx: 0,
-                rcx: 0,
-                rdx: 0,
-                rsi: 0,
-                rdi: 0,
-                rbp: 0,
-                rsp: stack_ptr.as_u64(),
-                r8: 0,
-                r9: 0,
-                r10: 0,
-                r11: 0,
-                r12: 0,
-                r13: 0,
-                r14: 0,
-                r15: 0,
-                rflags: 0x202, // Default RFLAGS with interrupts enabled
-                rip: entry_point.as_u64(),
+            registers: {
+                let mut regs = RegisterState::new();
+                regs.rsp = stack_ptr.as_u64();
+                regs.rip = entry_point.as_u64();
+                regs
             },
+            has_saved_state: false,
         };
 
         let pid = self.next_pid;
@@ -500,6 +622,12 @@ impl ProcessManager {
                 return Some(self.processes[index].pid);
             }
         }
+
+        // If we can't find a new process but we have a current process, return it
+        if self.current_pid != 0 && self.get_process(self.current_pid).is_some() {
+            return Some(self.current_pid);
+        }
+
         None
     }
 
@@ -510,6 +638,53 @@ impl ProcessManager {
             self.get_process(self.current_pid)
         }
     }
+
+    /// Save the current CPU state into the current process
+    pub fn save_current_process_state(
+        &mut self,
+        interrupt_frame: Option<&x86_64::structures::idt::InterruptStackFrame>,
+    ) {
+        if self.current_pid == 0 {
+            return; // No current process to save
+        }
+
+        if let Some(process) = self.get_process_mut(self.current_pid) {
+            // If we have an interrupt frame, use it as the primary source of state
+            if let Some(frame) = interrupt_frame {
+                // Use the interrupt frame for the critical state
+                let mut saved_state = RegisterState::new();
+                saved_state.rip = frame.instruction_pointer.as_u64();
+                saved_state.rsp = frame.stack_pointer.as_u64();
+                saved_state.rflags = frame.cpu_flags.bits();
+
+                // For other general-purpose registers, keep them as zero (safe defaults)
+                // Don't capture them from interrupt handler context as that would be garbage
+                // The process will need to reinitialize any registers it cares about
+
+                process.registers = saved_state;
+
+                // Update the process's instruction pointer and stack pointer
+                process.instruction_pointer = VirtAddr::new(saved_state.rip);
+                process.stack_pointer = VirtAddr::new(saved_state.rsp);
+
+                // Mark that this process now has valid saved state
+                process.has_saved_state = true;
+
+                serial_println!(
+                    "Saved state for process {}: RIP=0x{:x}, RSP=0x{:x}, RFLAGS=0x{:x}",
+                    self.current_pid,
+                    saved_state.rip,
+                    saved_state.rsp,
+                    saved_state.rflags
+                );
+            } else {
+                serial_println!(
+                    "No interrupt frame available, skipping state save for process {}",
+                    self.current_pid
+                );
+            }
+        }
+    }
 }
 
 lazy_static! {
@@ -518,17 +693,44 @@ lazy_static! {
 
 // Main scheduling function called by timer interrupt
 pub fn schedule() -> ! {
+    schedule_with_frame(None)
+}
+
+// Enhanced scheduling function that can save state from interrupt context
+pub fn schedule_with_frame(
+    interrupt_frame: Option<&x86_64::structures::idt::InterruptStackFrame>,
+) -> ! {
     // Only schedule if we're not already in a critical section
     if let Some(mut pm) = PROCESS_MANAGER.try_lock() {
         if let Some(next_pid) = pm.get_next_ready_process() {
+            // Save the current process state before switching
+            if pm.current_pid != 0 {
+                // Check if the current process still exists before saving state
+                if pm.get_process(pm.current_pid).is_some() {
+                    serial_println!("Saving state for process {}", pm.current_pid);
+                    pm.save_current_process_state(interrupt_frame);
+                } else {
+                    serial_println!(
+                        "Current process {} no longer exists, skipping state save",
+                        pm.current_pid
+                    );
+                }
+            }
+
             // Clear the current process
             let current_pid = pm.current_pid;
             if let Some(current_process) = pm.get_process_mut(current_pid) {
                 current_process.state = ProcessState::Ready;
             }
 
-            let mut process = pm.get_process(next_pid).unwrap().clone();
-            process.state = ProcessState::Running;
+            // Get and update the next process
+            let mut process = {
+                let next_process = pm.get_process_mut(next_pid).unwrap();
+                next_process.state = ProcessState::Running;
+
+                next_process.clone()
+            };
+
             pm.current_pid = next_pid;
 
             drop(pm);
@@ -603,6 +805,26 @@ fn perform_kernel_context_switch(process: &mut Process) -> ! {
         process.stack_pointer
     );
 
+    if !process.has_saved_state {
+        serial_println!(
+            "First run of kernel process {}, using simple setup",
+            process.pid
+        );
+        // For first-time kernel processes, use simple setup
+        perform_kernel_first_run(process);
+    } else {
+        serial_println!(
+            "Resuming kernel process {}, restoring full state",
+            process.pid
+        );
+        // For resumed processes, restore full register state
+        perform_kernel_resume(process);
+    }
+}
+
+fn perform_kernel_first_run(process: &mut Process) -> ! {
+    serial_println!("Setting up first run for kernel process {}", process.pid);
+
     unsafe {
         // Ensure we're using the kernel's page table
         let kernel_cr3 = x86_64::registers::control::Cr3::read()
@@ -612,35 +834,140 @@ fn perform_kernel_context_switch(process: &mut Process) -> ! {
         asm!("mov cr3, {}", in(reg) kernel_cr3);
         x86_64::instructions::tlb::flush_all();
 
-        // Set up proper interrupt return frame for kernel process
-        let aligned_stack = process.stack_pointer.as_u64() & !0xf;
-        let entry_point = process.instruction_pointer.as_u64();
+        // Get kernel selectors
+        let kernel_code_sel = crate::gdt::GDT.1.code.0 as u64;
+        let kernel_data_sel = crate::gdt::GDT.1.data.0 as u64;
+
+        // Use iretq setup to ensure interrupts are enabled properly
+        let temp_stack = process.stack_pointer.as_u64() - 128;
+
+        asm!(
+            "mov rsp, {temp_stack}",
+            "push {ss}",      // SS
+            "push {krsp}",    // RSP
+            "push 0x202",     // RFLAGS (interrupts enabled)
+            "push {cs}",      // CS
+            "push {rip}",     // RIP
+            temp_stack = in(reg) temp_stack,
+            ss = in(reg) kernel_data_sel,
+            krsp = in(reg) process.stack_pointer.as_u64(),
+            cs = in(reg) kernel_code_sel,
+            rip = in(reg) process.instruction_pointer.as_u64(),
+        );
+
+        // Set up kernel segments
+        asm!(
+            "mov ax, {data_sel:x}",
+            "mov ds, ax",
+            "mov es, ax",
+            "mov fs, ax",
+            "mov gs, ax",
+            data_sel = in(reg) kernel_data_sel as u16,
+        );
+
+        // Clear registers for clean start
+        asm!(
+            "xor rax, rax",
+            "xor rbx, rbx",
+            "xor rcx, rcx",
+            "xor rdx, rdx",
+            "xor rsi, rsi",
+            "xor rdi, rdi",
+            "xor rbp, rbp",
+            "xor r8, r8",
+            "xor r9, r9",
+            "xor r10, r10",
+            "xor r11, r11",
+            "xor r12, r12",
+            "xor r13, r13",
+            "xor r14, r14",
+            "xor r15, r15",
+        );
+
+        // Use iretq to properly enable interrupts
+        asm!("iretq", options(noreturn));
+    }
+}
+
+fn perform_kernel_resume(process: &mut Process) -> ! {
+    serial_println!("Restoring kernel register state: {:?}", process.registers);
+
+    unsafe {
+        // Ensure we're using the kernel's page table
+        let kernel_cr3 = x86_64::registers::control::Cr3::read()
+            .0
+            .start_address()
+            .as_u64();
+        asm!("mov cr3, {}", in(reg) kernel_cr3);
+        x86_64::instructions::tlb::flush_all();
 
         // Get kernel selectors
         let kernel_code_sel = crate::gdt::GDT.1.code.0 as u64;
         let kernel_data_sel = crate::gdt::GDT.1.data.0 as u64;
 
+        // Switch to a temporary stack and set up iret frame
+        let temp_stack = process.registers.rsp - 128;
+
         asm!(
-            // Switch to a temporary stack to set up the interrupt frame
             "mov rsp, {temp_stack}",
-
-            // Push interrupt return frame (in reverse order for iretq)
-            "push {ss}",           // Stack segment
-            "push {rsp}",          // Stack pointer
-            "push 0x202",          // RFLAGS (interrupts enabled)
-            "push {cs}",           // Code segment
-            "push {rip}",          // Instruction pointer
-
-            // Use iretq to "return" to the kernel process
-            "iretq",
-
-            temp_stack = in(reg) aligned_stack - 64, // Temporary stack space
+            "push {ss}",      // SS
+            "push {krsp}",    // RSP
+            "push {rflags}",  // RFLAGS
+            "push {cs}",      // CS
+            "push {rip}",     // RIP
+            temp_stack = in(reg) temp_stack,
             ss = in(reg) kernel_data_sel,
-            rsp = in(reg) aligned_stack,
+            krsp = in(reg) process.registers.rsp,
+            rflags = in(reg) process.registers.rflags,
             cs = in(reg) kernel_code_sel,
-            rip = in(reg) entry_point,
-            options(noreturn)
+            rip = in(reg) process.registers.rip,
         );
+
+        // Restore registers in chunks
+        asm!(
+            "mov rax, {rax}",
+            "mov rbx, {rbx}",
+            "mov rcx, {rcx}",
+            "mov rdx, {rdx}",
+            rax = in(reg) process.registers.rax,
+            rbx = in(reg) process.registers.rbx,
+            rcx = in(reg) process.registers.rcx,
+            rdx = in(reg) process.registers.rdx,
+        );
+
+        asm!(
+            "mov rsi, {rsi}",
+            "mov rdi, {rdi}",
+            "mov rbp, {rbp}",
+            "mov r8, {r8}",
+            rsi = in(reg) process.registers.rsi,
+            rdi = in(reg) process.registers.rdi,
+            rbp = in(reg) process.registers.rbp,
+            r8 = in(reg) process.registers.r8,
+        );
+
+        asm!(
+            "mov r9, {r9}",
+            "mov r10, {r10}",
+            "mov r11, {r11}",
+            "mov r12, {r12}",
+            r9 = in(reg) process.registers.r9,
+            r10 = in(reg) process.registers.r10,
+            r11 = in(reg) process.registers.r11,
+            r12 = in(reg) process.registers.r12,
+        );
+
+        asm!(
+            "mov r13, {r13}",
+            "mov r14, {r14}",
+            "mov r15, {r15}",
+            r13 = in(reg) process.registers.r13,
+            r14 = in(reg) process.registers.r14,
+            r15 = in(reg) process.registers.r15,
+        );
+
+        // Switch to kernel process
+        asm!("iretq", options(noreturn));
     }
 }
 
@@ -670,37 +997,158 @@ fn switch_to_user_mode_direct(process: &Process) -> ! {
         process.stack_pointer
     );
 
+    if !process.has_saved_state {
+        serial_println!(
+            "First run of user process {}, using simple setup",
+            process.pid
+        );
+        switch_to_user_mode_first_run(process);
+    } else {
+        serial_println!(
+            "Resuming user process {}, restoring full state",
+            process.pid
+        );
+        switch_to_user_mode_resume(process);
+    }
+}
+
+fn switch_to_user_mode_first_run(process: &Process) -> ! {
+    serial_println!("Setting up first run for user process {}", process.pid);
+
     // Get user mode selectors from GDT - construct with RPL=3
     let user_code_sel = u64::from((crate::gdt::GDT.1.user_code.index() << 3) | 3);
     let user_data_sel = u64::from((crate::gdt::GDT.1.user_data.index() << 3) | 3);
 
     unsafe {
+        // Set up segments
         asm!(
-            "
-            // Set up user mode segments
-            // mov ax, {user_data_sel_16:x}
-            // mov ds, ax
-            // mov es, ax
-            // mov fs, ax
-            // mov gs, ax
+            "mov ax, {0:x}",
+            "mov ds, ax",
+            "mov es, ax",
+            "mov fs, ax",
+            "mov gs, ax",
+            in(reg) user_data_sel as u16,
+        );
 
+        // Simple setup for first run - use the stack and entry point from the process
+        asm!(
             // Push values for IRET (in reverse order)
-            push {user_data_sel}        // SS
-            push {user_stack_ptr}       // RSP
-            push 0x202                  // RFLAGS (interrupts enabled)
-            push {user_code_sel}        // CS
-            push {user_ip}              // RIP
+            "push {user_data_sel}",    // SS
+            "push {user_stack_ptr}",   // RSP
+            "push 0x202",              // RFLAGS (interrupts enabled)
+            "push {user_code_sel}",    // CS
+            "push {user_ip}",          // RIP
+
+            // Clear all registers for clean start
+            "xor rax, rax",
+            "xor rbx, rbx",
+            "xor rcx, rcx",
+            "xor rdx, rdx",
+            "xor rsi, rsi",
+            "xor rdi, rdi",
+            "xor rbp, rbp",
+            "xor r8, r8",
+            "xor r9, r9",
+            "xor r10, r10",
+            "xor r11, r11",
+            "xor r12, r12",
+            "xor r13, r13",
+            "xor r14, r14",
+            "xor r15, r15",
 
             // Switch to user mode
-            iretq
-            ",
-            user_data_sel_16 = in(reg) (user_data_sel as u16),
+            "iretq",
             user_data_sel = in(reg) user_data_sel,
             user_stack_ptr = in(reg) process.stack_pointer.as_u64(),
             user_code_sel = in(reg) user_code_sel,
             user_ip = in(reg) process.instruction_pointer.as_u64(),
             options(noreturn)
         );
+    }
+}
+
+fn switch_to_user_mode_resume(process: &Process) -> ! {
+    serial_println!("Restoring register state: {:?}", process.registers);
+
+    // Get user mode selectors from GDT - construct with RPL=3
+    let user_code_sel = u64::from((crate::gdt::GDT.1.user_code.index() << 3) | 3);
+    let user_data_sel = u64::from((crate::gdt::GDT.1.user_data.index() << 3) | 3);
+
+    unsafe {
+        // First, set up segments
+        asm!(
+            "mov ax, {0:x}",
+            "mov ds, ax",
+            "mov es, ax",
+            "mov fs, ax",
+            "mov gs, ax",
+            in(reg) user_data_sel as u16,
+        );
+
+        // Create space on stack for the iret frame
+        let temp_stack = process.registers.rsp - 128; // Give ourselves some space
+
+        // Switch to our temporary stack and push iret frame
+        asm!(
+            "mov rsp, {temp_stack}",
+            "push {ss}",      // SS
+            "push {user_rsp}", // RSP
+            "push {rflags}",  // RFLAGS
+            "push {cs}",      // CS
+            "push {rip}",     // RIP
+            temp_stack = in(reg) temp_stack,
+            ss = in(reg) user_data_sel,
+            user_rsp = in(reg) process.registers.rsp,
+            rflags = in(reg) process.registers.rflags,
+            cs = in(reg) user_code_sel,
+            rip = in(reg) process.registers.rip,
+        );
+
+        // Now restore registers in chunks to avoid register pressure
+        asm!(
+            "mov rax, {rax}",
+            "mov rbx, {rbx}",
+            "mov rcx, {rcx}",
+            "mov rdx, {rdx}",
+            rax = in(reg) process.registers.rax,
+            rbx = in(reg) process.registers.rbx,
+            rcx = in(reg) process.registers.rcx,
+            rdx = in(reg) process.registers.rdx,
+        );
+
+        asm!(
+            "mov rsi, {rsi}",
+            "mov rdi, {rdi}",
+            "mov rbp, {rbp}",
+            "mov r8, {r8}",
+            rsi = in(reg) process.registers.rsi,
+            rdi = in(reg) process.registers.rdi,
+            rbp = in(reg) process.registers.rbp,
+            r8 = in(reg) process.registers.r8,
+        );
+
+        asm!(
+            "mov r9, {r9}",
+            "mov r10, {r10}",
+            "mov r11, {r11}",
+            "mov r12, {r12}",
+            r9 = in(reg) process.registers.r9,
+            r10 = in(reg) process.registers.r10,
+            r11 = in(reg) process.registers.r11,
+            r12 = in(reg) process.registers.r12,
+        );
+
+        asm!(
+            "mov r13, {r13}",
+            "mov r14, {r14}",
+            "mov r15, {r15}",
+            r13 = in(reg) process.registers.r13,
+            r14 = in(reg) process.registers.r14,
+            r15 = in(reg) process.registers.r15,
+        );
+
+        // Finally, switch to user mode
+        asm!("iretq", options(noreturn));
     }
 }
 
@@ -743,39 +1191,41 @@ pub fn kill_process(process: &mut Process) -> Result<(), ProcessError> {
 pub fn exit_current_process(exit_code: u8) {
     serial_println!("Exiting current process with exit code {}", exit_code);
 
-    let mut pm = PROCESS_MANAGER
-        .try_lock()
-        .expect("Failed to acquire PROCESS_MANAGER lock");
+    without_interrupts(|| {
+        let mut pm = PROCESS_MANAGER
+            .try_lock()
+            .expect("Failed to acquire PROCESS_MANAGER lock");
 
-    // Switch back to kernel page table BEFORE any cleanup
-    unsafe {
-        asm!("mov cr3, {}", in(reg) pm.kernel_cr3);
-        serial_println!(
-            "Switched back to kernel page table (CR3: 0x{:x})",
-            pm.kernel_cr3
-        );
-    }
+        // Switch back to kernel page table BEFORE any cleanup
+        unsafe {
+            asm!("mov cr3, {}", in(reg) pm.kernel_cr3);
+            serial_println!(
+                "Switched back to kernel page table (CR3: 0x{:x})",
+                pm.kernel_cr3
+            );
+        }
 
-    let current_pid = pm.current_pid;
-    pm.current_pid = 0;
+        let current_pid = pm.current_pid;
+        pm.current_pid = 0;
 
-    let index = pm
-        .processes
-        .iter()
-        .position(|p| p.pid == current_pid)
-        .expect("Current process not found");
+        let index = pm
+            .processes
+            .iter()
+            .position(|p| p.pid == current_pid)
+            .expect("Current process not found");
 
-    let mut process = pm
-        .get_process_mut(current_pid)
-        .expect("No current process to exit")
-        .clone();
+        let mut process = pm
+            .get_process_mut(current_pid)
+            .expect("No current process to exit")
+            .clone();
 
-    pm.processes.remove(index);
+        pm.processes.remove(index);
 
-    drop(pm); // Release the lock before calling cleanup
+        drop(pm); // Release the lock before calling cleanup
 
-    kill_process(&mut process)
-        .unwrap_or_else(|e| serial_println!("Failed to exit process: {:?}", e));
+        kill_process(&mut process)
+            .unwrap_or_else(|e| serial_println!("Failed to exit process: {:?}", e));
 
-    serial_println!("Current process exited");
+        serial_println!("Current process exited");
+    });
 }

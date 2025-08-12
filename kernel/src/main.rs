@@ -131,14 +131,14 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     #[cfg(test)]
     test_main();
 
-    {
-        use kernel::process::PROCESS_MANAGER;
+    // {
+    //     use kernel::process::PROCESS_MANAGER;
 
-        let mut pm = PROCESS_MANAGER.lock();
-        let pid = 1;
+    //     let mut pm = PROCESS_MANAGER.lock();
+    //     let pid = 1;
 
-        pm.set_current_pid(pid);
-    }
+    //     pm.set_current_pid(pid);
+    // }
 
     // The kernel should continue running and let the scheduler handle task execution
     interrupts::enable();
