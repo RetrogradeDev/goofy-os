@@ -6,7 +6,6 @@ use core::{
     task::{Context, Poll},
 };
 
-pub mod desktop;
 pub mod executor;
 pub mod keyboard;
 pub mod mouse;

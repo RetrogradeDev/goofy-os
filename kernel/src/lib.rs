@@ -15,14 +15,14 @@ use exit::{QemuExitCode, exit_qemu};
 extern crate alloc;
 
 pub mod allocator;
-pub mod drawbuffer;
+pub mod desktop;
 pub mod exit;
 pub mod framebuffer;
 pub mod gdt;
-pub mod graphics;
 pub mod interrupts;
 pub mod memory;
 pub mod serial;
+pub mod surface;
 pub mod task;
 
 use bootloader_api::config::{BootloaderConfig, Mapping};

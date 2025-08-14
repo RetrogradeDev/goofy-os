@@ -1,3 +1,4 @@
+use alloc::vec::Vec;
 use bootloader_api::info::{FrameBuffer, FrameBufferInfo, PixelFormat};
 use conquer_once::spin::OnceCell;
 use core::{fmt, ptr};
@@ -131,6 +132,10 @@ impl FrameBufferWriter {
         self.x_pos = BORDER_PADDING;
     }
 
+    pub fn fill(&mut self) {
+        self.framebuffer.fill(0);
+    }
+
     /// Erases all text on the screen. Resets `self.x_pos` and `self.y_pos`.
     pub fn clear(&mut self) {
         self.x_pos = BORDER_PADDING;
@@ -206,6 +211,58 @@ impl FrameBufferWriter {
             .copy_from_slice(&color[..bytes_per_pixel]);
         let _ = unsafe { ptr::read_volatile(&self.framebuffer[byte_offset]) };
     }
+
+    pub fn draw_mouse_cursor(&mut self, x: usize, y: usize) {
+        // Draw a simple crosshair cursor
+        let cursor_color = Color::new(255, 0, 0); // Red color
+        self.write_pixel(x, y, cursor_color);
+        self.write_pixel(x + 1, y, cursor_color);
+        self.write_pixel(x - 1, y, cursor_color);
+        self.write_pixel(x, y + 1, cursor_color);
+        self.write_pixel(x, y - 1, cursor_color);
+    }
+
+    pub fn draw_line(&mut self, start: (usize, usize), end: (usize, usize), color: Color) {
+        let dx = end.0 as isize - start.0 as isize;
+        let dy = end.1 as isize - start.1 as isize;
+        let steps = dx.abs().max(dy.abs()) as usize;
+
+        for i in 0..=steps {
+            let t = i as f32 / steps as f32;
+            let x = (start.0 as f32 + t * dx as f32) as usize;
+            let y = (start.1 as f32 + t * dy as f32) as usize;
+            self.write_pixel(x, y, color);
+        }
+    }
+
+    pub fn draw_rect(
+        &mut self,
+        top_left: (usize, usize),
+        bottom_right: (usize, usize),
+        color: Color,
+    ) {
+        for x in top_left.0..=bottom_right.0 {
+            for y in top_left.1..=bottom_right.1 {
+                self.write_pixel(x, y, color);
+            }
+        }
+    }
+
+    pub fn draw_rect_outline(
+        &mut self,
+        top_left: (usize, usize),
+        bottom_right: (usize, usize),
+        color: Color,
+    ) {
+        for x in top_left.0..=bottom_right.0 {
+            self.write_pixel(x, top_left.1, color);
+            self.write_pixel(x, bottom_right.1, color);
+        }
+        for y in top_left.1..=bottom_right.1 {
+            self.write_pixel(top_left.0, y, color);
+            self.write_pixel(bottom_right.0, y, color);
+        }
+    }
 }
 
 unsafe impl Send for FrameBufferWriter {}
@@ -231,4 +288,12 @@ pub fn init(frame: &'static mut FrameBuffer) {
         let buffer = frame.buffer_mut();
         spinning_top::Spinlock::new(FrameBufferWriter::new(buffer, info))
     });
+}
+
+pub fn set_buffer(buffer: &[u8]) {
+    if let Some(fb) = FRAMEBUFFER.get() {
+        fb.lock().framebuffer.copy_from_slice(buffer);
+    } else {
+        panic!("FrameBuffer not initialized");
+    }
 }

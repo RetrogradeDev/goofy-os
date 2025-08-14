@@ -9,14 +9,7 @@ use core::panic::PanicInfo;
 extern crate alloc;
 
 use bootloader_api::{BootInfo, entry_point};
-use kernel::{
-    graphics::{
-        draw_circle, draw_circle_outline, draw_line, draw_rect, draw_rect_outline, set_pixel,
-    },
-    memory::BootInfoFrameAllocator,
-    println, serial_println,
-    task::{Task, desktop::run_desktop, keyboard::print_keypresses, mouse::print_mouse_states},
-};
+use kernel::{desktop::run_desktop, memory::BootInfoFrameAllocator, println, serial_println};
 
 use bootloader_api::config::{BootloaderConfig, Mapping};
 use x86_64::instructions::interrupts;
@@ -39,25 +32,6 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     serial_println!("Initializing framebuffer");
     let frame = boot_info.framebuffer.as_mut().unwrap();
     kernel::framebuffer::init(frame);
-
-    set_pixel(10, 10, kernel::framebuffer::Color::new(255, 0, 0));
-    draw_line(
-        (100, 100),
-        (50, 50),
-        kernel::framebuffer::Color::new(0, 255, 0),
-    );
-    draw_rect(
-        (200, 200),
-        (300, 300),
-        kernel::framebuffer::Color::new(0, 0, 255),
-    );
-    draw_rect_outline(
-        (400, 400),
-        (500, 500),
-        kernel::framebuffer::Color::new(255, 255, 0),
-    );
-    draw_circle((600, 600), 50, kernel::framebuffer::Color::new(255, 0, 255));
-    draw_circle_outline((700, 600), 75, kernel::framebuffer::Color::new(0, 255, 255));
 
     let phys_mem_offset = VirtAddr::new(boot_info.physical_memory_offset.into_option().unwrap());
 
@@ -92,18 +66,17 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     let heap_string = alloc::string::String::from("Hello from the heap!");
     println!("heap_string at {:p}", heap_string.as_ptr());
 
+    serial_println!("Heap tests completed successfully!");
+
     #[cfg(test)]
     test_main();
+
+    serial_println!("Running desktop...");
 
     // The kernel should continue running and let the scheduler handle task execution
     interrupts::enable();
 
-    // Initialize the global executor
-    let mut executor = kernel::task::executor::Executor::new();
-    executor.spawn(Task::new(print_keypresses()));
-    executor.spawn(Task::new(print_mouse_states()));
-    executor.spawn(Task::new(run_desktop()));
-    executor.run();
+    run_desktop();
 }
 
 #[cfg(not(test))]

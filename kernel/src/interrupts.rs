@@ -68,7 +68,7 @@ pub fn init_mouse() {
 
 // This will be fired when a packet is finished being processed.
 fn on_complete(mouse_state: MouseState) {
-    crate::task::mouse::add_mouse_state(mouse_state);
+    crate::desktop::add_mouse_state(mouse_state);
 }
 
 // An example interrupt based on https://os.phil-opp.com/hardware-interrupts/. The ps2 mouse is configured to fire
@@ -79,9 +79,7 @@ extern "x86-interrupt" fn mouse_interrupt_handler(_stack_frame: InterruptStackFr
 
     // I know this is a bad practice but we are sort of forced to do this here
     // I spent 3h trying to do it otherwise but none of the solutions worked.
-    without_interrupts(|| {
-        MOUSE.lock().process_packet(packet);
-    });
+    MOUSE.lock().process_packet(packet);
 
     unsafe {
         PICS.lock()
@@ -139,7 +137,6 @@ extern "x86-interrupt" fn double_fault_handler(
 
 extern "x86-interrupt" fn timer_handler(_stack_frame: InterruptStackFrame) {
     print!(".");
-    serial_println!("TIMER");
 
     // Notify the Programmable Interrupt Controller (PIC) that the interrupt has been handled
     unsafe {
@@ -153,7 +150,8 @@ extern "x86-interrupt" fn keyboard_interrupt_handler(_stack_frame: InterruptStac
 
     let mut port = Port::new(0x60);
     let scancode: u8 = unsafe { port.read() };
-    crate::task::keyboard::add_scancode(scancode);
+    // crate::task::keyboard::add_scancode(scancode);
+    crate::desktop::add_scancode(scancode);
 
     unsafe {
         PICS.lock()
