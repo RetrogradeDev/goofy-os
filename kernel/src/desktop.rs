@@ -51,6 +51,7 @@ pub fn init_queues() {
 pub struct CurrentMouseState {
     pub x: i16,
     pub y: i16,
+    pub has_moved: bool,
 
     _screen_size: (u16, u16),
 }
@@ -61,6 +62,7 @@ impl CurrentMouseState {
         CurrentMouseState {
             x: (screen_size.0 / 2) as i16,
             y: (screen_size.1 / 2) as i16,
+            has_moved: false,
             _screen_size: screen_size,
         }
     }
@@ -72,6 +74,8 @@ impl CurrentMouseState {
         // Make sure the mouse cursor stays within the screen boundaries
         self.x = self.x.clamp(0, self._screen_size.0 as i16 - 1);
         self.y = self.y.clamp(0, self._screen_size.1 as i16 - 1);
+
+        self.has_moved = true;
     }
 }
 
@@ -124,9 +128,11 @@ pub fn run_desktop() -> ! {
         without_interrupts(|| {
             if let Some(fb) = framebuffer::FRAMEBUFFER.get() {
                 let mut fb_lock = fb.lock();
-                // fb_lock.fill(); // Clear to black
 
-                fb_lock.draw_mouse_cursor(mouse_state.x as usize, mouse_state.y as usize);
+                if mouse_state.has_moved {
+                    fb_lock.draw_mouse_cursor(mouse_state.x as usize, mouse_state.y as usize);
+                    mouse_state.has_moved = false;
+                }
 
                 taskbar_surface.render(&mut fb_lock);
             } else {

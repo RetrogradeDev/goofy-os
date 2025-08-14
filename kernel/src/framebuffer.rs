@@ -1,4 +1,3 @@
-use alloc::vec::Vec;
 use bootloader_api::info::{FrameBuffer, FrameBufferInfo, PixelFormat};
 use conquer_once::spin::OnceCell;
 use core::{fmt, ptr};
@@ -47,6 +46,8 @@ const LETTER_SPACING: usize = 0;
 /// Padding from the border. Prevent that font is too close to border.
 const BORDER_PADDING: usize = 1;
 
+const CURSOR_SIZE: usize = 5; // Size of the crosshair cursor
+
 /// Constants for the usage of the [`noto_sans_mono_bitmap`] crate.
 mod font_constants {
     use super::*;
@@ -84,6 +85,20 @@ pub struct Color {
     pub b: u8,
 }
 
+struct CursorBackground {
+    saved_pixels: [Color; CURSOR_SIZE],
+    previous_pos: Option<(usize, usize)>,
+}
+
+impl CursorBackground {
+    fn new() -> Self {
+        Self {
+            saved_pixels: [Color::new(0, 0, 0); CURSOR_SIZE],
+            previous_pos: None,
+        }
+    }
+}
+
 impl Color {
     pub fn new(r: u8, g: u8, b: u8) -> Self {
         Self { r, g, b }
@@ -108,6 +123,7 @@ pub struct FrameBufferWriter {
     info: FrameBufferInfo,
     x_pos: usize,
     y_pos: usize,
+    cursor_background: CursorBackground,
 }
 
 impl FrameBufferWriter {
@@ -118,6 +134,7 @@ impl FrameBufferWriter {
             info,
             x_pos: 0,
             y_pos: 0,
+            cursor_background: CursorBackground::new(),
         };
         logger.clear();
         logger
@@ -212,14 +229,99 @@ impl FrameBufferWriter {
         let _ = unsafe { ptr::read_volatile(&self.framebuffer[byte_offset]) };
     }
 
+    pub fn read_pixel(&self, x: usize, y: usize) -> Color {
+        let pixel_offset = y * self.info.stride + x;
+        let bytes_per_pixel = self.info.bytes_per_pixel;
+        let byte_offset = pixel_offset * bytes_per_pixel;
+
+        let bytes = &self.framebuffer[byte_offset..(byte_offset + bytes_per_pixel)];
+
+        match self.info.pixel_format {
+            PixelFormat::Rgb => Color::new(bytes[0], bytes[1], bytes[2]),
+            PixelFormat::Bgr => Color::new(bytes[2], bytes[1], bytes[0]),
+            PixelFormat::U8 => {
+                let intensity = if bytes[0] > 0 { 255 } else { 0 };
+                Color::new(intensity, intensity, intensity)
+            }
+            other => {
+                panic!("pixel format {:?} not supported for reading", other)
+            }
+        }
+    }
+
     pub fn draw_mouse_cursor(&mut self, x: usize, y: usize) {
-        // Draw a simple crosshair cursor
-        let cursor_color = Color::new(255, 0, 0); // Red color
-        self.write_pixel(x, y, cursor_color);
-        self.write_pixel(x + 1, y, cursor_color);
-        self.write_pixel(x - 1, y, cursor_color);
-        self.write_pixel(x, y + 1, cursor_color);
-        self.write_pixel(x, y - 1, cursor_color);
+        if let Some(prev_pos) = self.cursor_background.previous_pos {
+            self.restore_cursor_background(prev_pos);
+        }
+
+        self.save_cursor_background(x, y);
+        self.draw_cursor(x, y);
+
+        self.cursor_background.previous_pos = Some((x, y));
+    }
+
+    fn draw_cursor(&mut self, x: usize, y: usize) {
+        let cursor_color = Color::new(255, 0, 0);
+        let cursor_offsets: [(i32, i32); CURSOR_SIZE] =
+            [(0i32, 0i32), (1, 0), (-1, 0), (0, 1), (0, -1)];
+
+        for (dx, dy) in cursor_offsets.iter() {
+            let cursor_x = x as i32 + dx;
+            let cursor_y = y as i32 + dy;
+
+            if cursor_x >= 0
+                && cursor_y >= 0
+                && (cursor_x as usize) < self.width()
+                && (cursor_y as usize) < self.height()
+            {
+                self.write_pixel(cursor_x as usize, cursor_y as usize, cursor_color);
+            }
+        }
+    }
+
+    fn save_cursor_background(&mut self, x: usize, y: usize) {
+        let cursor_offsets: [(i32, i32); CURSOR_SIZE] =
+            [(0i32, 0i32), (1, 0), (-1, 0), (0, 1), (0, -1)];
+
+        for (i, (dx, dy)) in cursor_offsets.iter().enumerate() {
+            let cursor_x = x as i32 + dx;
+            let cursor_y = y as i32 + dy;
+
+            if cursor_x >= 0
+                && cursor_y >= 0
+                && (cursor_x as usize) < self.width()
+                && (cursor_y as usize) < self.height()
+            {
+                self.cursor_background.saved_pixels[i] =
+                    self.read_pixel(cursor_x as usize, cursor_y as usize);
+            } else {
+                // Save black for out-of-bounds pixels
+                self.cursor_background.saved_pixels[i] = Color::new(0, 0, 0);
+            }
+        }
+    }
+
+    fn restore_cursor_background(&mut self, prev_pos: (usize, usize)) {
+        let cursor_offsets: [(i32, i32); CURSOR_SIZE] =
+            [(0i32, 0i32), (1, 0), (-1, 0), (0, 1), (0, -1)];
+        let (prev_x, prev_y) = prev_pos;
+
+        for (i, (dx, dy)) in cursor_offsets.iter().enumerate() {
+            let cursor_x = prev_x as i32 + dx;
+            let cursor_y = prev_y as i32 + dy;
+
+            if cursor_x >= 0
+                && cursor_y >= 0
+                && (cursor_x as usize) < self.width()
+                && (cursor_y as usize) < self.height()
+            {
+                self.write_pixel(
+                    cursor_x as usize,
+                    cursor_y as usize,
+                    self.cursor_background.saved_pixels[i],
+                );
+            }
+        }
     }
 
     pub fn draw_line(&mut self, start: (usize, usize), end: (usize, usize), color: Color) {
