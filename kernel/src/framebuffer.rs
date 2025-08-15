@@ -1,3 +1,4 @@
+use alloc::vec::Vec;
 use bootloader_api::info::{FrameBuffer, FrameBufferInfo, PixelFormat};
 use conquer_once::spin::OnceCell;
 use core::{fmt, ptr};
@@ -6,6 +7,8 @@ use noto_sans_mono_bitmap::{
     FontWeight, RasterHeight, RasterizedChar, get_raster, get_raster_width,
 };
 use spinning_top::Spinlock;
+
+use crate::serial_println;
 
 pub static FRAMEBUFFER: OnceCell<Spinlock<FrameBufferWriter>> = OnceCell::uninit();
 pub static SCREEN_SIZE: OnceCell<(u16, u16)> = OnceCell::uninit();
@@ -33,7 +36,11 @@ pub fn _print(args: fmt::Arguments) {
     use x86_64::instructions::interrupts;
     interrupts::without_interrupts(|| {
         if let Some(fb) = FRAMEBUFFER.get() {
-            fb.lock().write_fmt(args).unwrap()
+            if let Some(mut guard) = fb.try_lock() {
+                guard.write_fmt(args).unwrap();
+            } else {
+                serial_println!("[FB DEADLOCK] - {}", args.as_str().unwrap_or("<unknown>"));
+            }
         }
     });
 }
@@ -47,6 +54,13 @@ const LETTER_SPACING: usize = 0;
 const BORDER_PADDING: usize = 1;
 
 const CURSOR_SIZE: usize = 5; // Size of the crosshair cursor
+const CURSOR_ROWS: [(isize, isize); 3] = [
+    (0, 0),  // Upper row
+    (-1, 1), // Middle row
+    (0, 0),  // Lower row
+];
+const CURSOR_ROW_OFFSET: usize = 1; // Offset for the cursor rows from the top of the cursor
+const CURSOR_COLOR: Color = Color::new(0, 0, 255);
 
 /// Constants for the usage of the [`noto_sans_mono_bitmap`] crate.
 mod font_constants {
@@ -86,21 +100,21 @@ pub struct Color {
 }
 
 struct CursorBackground {
-    saved_pixels: [Color; CURSOR_SIZE],
+    saved_pixels: [u8; CURSOR_SIZE * 3], // TODO: Don't hardcode this
     previous_pos: Option<(usize, usize)>,
 }
 
 impl CursorBackground {
     fn new() -> Self {
         Self {
-            saved_pixels: [Color::new(0, 0, 0); CURSOR_SIZE],
+            saved_pixels: [0; CURSOR_SIZE * 3], // 3 bytes per pixel for RGB
             previous_pos: None,
         }
     }
 }
 
 impl Color {
-    pub fn new(r: u8, g: u8, b: u8) -> Self {
+    pub const fn new(r: u8, g: u8, b: u8) -> Self {
         Self { r, g, b }
     }
 
@@ -209,6 +223,10 @@ impl FrameBufferWriter {
     }
 
     pub fn write_pixel(&mut self, x: usize, y: usize, color: Color) {
+        if x >= self.width() || y >= self.height() {
+            return; // Out of bounds
+        }
+
         let pixel_offset = y * self.info.stride + x;
         let color = match self.info.pixel_format {
             PixelFormat::Rgb => [color.r, color.g, color.b, 0],
@@ -230,6 +248,10 @@ impl FrameBufferWriter {
     }
 
     pub fn read_pixel(&self, x: usize, y: usize) -> Color {
+        if x >= self.width() || y >= self.height() {
+            return Color::new(0, 0, 0); // Out of bounds, return black
+        }
+
         let pixel_offset = y * self.info.stride + x;
         let bytes_per_pixel = self.info.bytes_per_pixel;
         let byte_offset = pixel_offset * bytes_per_pixel;
@@ -249,6 +271,37 @@ impl FrameBufferWriter {
         }
     }
 
+    pub fn write_raw_pixel_row(&mut self, x: usize, y: usize, data: &[u8]) {
+        if y >= self.height() || x >= self.width() {
+            return;
+        }
+
+        let max_width = (self.width() - x).min(data.len() / self.info.bytes_per_pixel);
+        let bytes_per_pixel = self.info.bytes_per_pixel;
+        let start_offset = (y * self.info.stride + x) * bytes_per_pixel;
+
+        self.framebuffer[start_offset..start_offset + max_width * bytes_per_pixel]
+            .copy_from_slice(&data[..max_width * bytes_per_pixel]);
+    }
+
+    /// Read a horizontal line of pixels at once
+    pub fn read_raw_pixel_row(&self, x: usize, y: usize, count: usize) -> &[u8] {
+        if y >= self.height() || x >= self.width() {
+            return &[];
+        }
+
+        let max_width = (self.width() - x).min(count);
+        let bytes_per_pixel = self.info.bytes_per_pixel;
+        let start_offset = (y * self.info.stride + x) * bytes_per_pixel;
+
+        let data = self
+            .framebuffer
+            .get(start_offset..start_offset + max_width * bytes_per_pixel)
+            .unwrap_or(&[]);
+
+        data
+    }
+
     pub fn draw_mouse_cursor(&mut self, x: usize, y: usize) {
         if let Some(prev_pos) = self.cursor_background.previous_pos {
             self.restore_cursor_background(prev_pos);
@@ -261,66 +314,84 @@ impl FrameBufferWriter {
     }
 
     fn draw_cursor(&mut self, x: usize, y: usize) {
-        let cursor_color = Color::new(255, 0, 0);
-        let cursor_offsets: [(i32, i32); CURSOR_SIZE] =
-            [(0i32, 0i32), (1, 0), (-1, 0), (0, 1), (0, -1)];
+        let start_y: usize = y.saturating_sub(CURSOR_ROW_OFFSET);
 
-        for (dx, dy) in cursor_offsets.iter() {
-            let cursor_x = x as i32 + dx;
-            let cursor_y = y as i32 + dy;
+        for (i, (start_x, end_x)) in CURSOR_ROWS.iter().enumerate() {
+            let cursor_y = start_y as isize + i as isize;
+            let start_x = x as isize + start_x;
+            let end_x = x as isize + end_x;
 
-            if cursor_x >= 0
-                && cursor_y >= 0
-                && (cursor_x as usize) < self.width()
-                && (cursor_y as usize) < self.height()
-            {
-                self.write_pixel(cursor_x as usize, cursor_y as usize, cursor_color);
+            if cursor_y < 0 || cursor_y >= self.height() as isize {
+                continue; // Skip out-of-bounds rows
             }
+
+            self.write_pixel_row(
+                start_x as usize,
+                end_x as usize,
+                cursor_y as usize,
+                &CURSOR_COLOR,
+            );
         }
     }
 
     fn save_cursor_background(&mut self, x: usize, y: usize) {
-        let cursor_offsets: [(i32, i32); CURSOR_SIZE] =
-            [(0i32, 0i32), (1, 0), (-1, 0), (0, 1), (0, -1)];
+        let start_y: usize = y.saturating_sub(CURSOR_ROW_OFFSET);
 
-        for (i, (dx, dy)) in cursor_offsets.iter().enumerate() {
-            let cursor_x = x as i32 + dx;
-            let cursor_y = y as i32 + dy;
+        let mut idx: usize = 0; // Index for the saved pixels
+        for (i, (start_x, end_x)) in CURSOR_ROWS.iter().enumerate() {
+            let cursor_y = start_y as isize + i as isize;
 
-            if cursor_x >= 0
-                && cursor_y >= 0
-                && (cursor_x as usize) < self.width()
-                && (cursor_y as usize) < self.height()
-            {
-                self.cursor_background.saved_pixels[i] =
-                    self.read_pixel(cursor_x as usize, cursor_y as usize);
-            } else {
-                // Save black for out-of-bounds pixels
-                self.cursor_background.saved_pixels[i] = Color::new(0, 0, 0);
+            let count = (end_x - start_x + 1) as usize;
+            let start_x = x as isize + start_x;
+
+            let bytes_per_pixel = self.info.bytes_per_pixel;
+
+            if cursor_y < 0 || cursor_y >= self.height() as isize {
+                continue; // Skip out-of-bounds rows
             }
+
+            if start_x < 0
+                || start_x + count as isize * bytes_per_pixel as isize > self.width() as isize
+            {
+                continue; // Skip out-of-bounds columns
+            }
+
+            let row = self
+                .read_raw_pixel_row(start_x as usize, cursor_y as usize, count)
+                .to_vec();
+
+            self.cursor_background.saved_pixels[idx..idx + count * bytes_per_pixel]
+                .copy_from_slice(&row);
+
+            idx += count * bytes_per_pixel;
         }
     }
 
     fn restore_cursor_background(&mut self, prev_pos: (usize, usize)) {
-        let cursor_offsets: [(i32, i32); CURSOR_SIZE] =
-            [(0i32, 0i32), (1, 0), (-1, 0), (0, 1), (0, -1)];
-        let (prev_x, prev_y) = prev_pos;
+        let start_y: usize = prev_pos.1.saturating_sub(CURSOR_ROW_OFFSET);
 
-        for (i, (dx, dy)) in cursor_offsets.iter().enumerate() {
-            let cursor_x = prev_x as i32 + dx;
-            let cursor_y = prev_y as i32 + dy;
+        let mut idx: usize = 0; // Index for the saved pixels
+        for (i, (start_x, end_x)) in CURSOR_ROWS.iter().enumerate() {
+            let cursor_y = start_y as isize + i as isize;
 
-            if cursor_x >= 0
-                && cursor_y >= 0
-                && (cursor_x as usize) < self.width()
-                && (cursor_y as usize) < self.height()
-            {
-                self.write_pixel(
-                    cursor_x as usize,
-                    cursor_y as usize,
-                    self.cursor_background.saved_pixels[i],
-                );
+            let count = (end_x - start_x + 1) as usize;
+            let start_x = prev_pos.0 as isize + start_x;
+            let bytes_per_pixel = self.info.bytes_per_pixel;
+
+            if cursor_y < 0 || cursor_y >= self.height() as isize {
+                continue; // Skip out-of-bounds rows
             }
+            if start_x < 0
+                || start_x + count as isize * bytes_per_pixel as isize > self.width() as isize
+            {
+                continue; // Skip out-of-bounds columns
+            }
+
+            let row =
+                &self.cursor_background.saved_pixels[idx..idx + count * bytes_per_pixel].to_vec();
+
+            self.write_raw_pixel_row(start_x as usize, cursor_y as usize, &row);
+            idx += count * bytes_per_pixel;
         }
     }
 
@@ -337,16 +408,49 @@ impl FrameBufferWriter {
         }
     }
 
+    /// Writes a horizontal line of pixels at once.
+    fn write_pixel_row(&mut self, x1: usize, x2: usize, y: usize, data: &Color) {
+        if y >= self.height() || x1 >= self.width() || x2 >= self.width() {
+            return;
+        }
+
+        let max_width = (x2 - x1 + 1).min(self.width() - x1);
+        let bytes_per_pixel = self.info.bytes_per_pixel;
+        let start_offset = (y * self.info.stride + x1) * bytes_per_pixel;
+
+        // Convert the color to the appropriate pixel format
+        let color: [u8; 3] = match self.info.pixel_format {
+            PixelFormat::Rgb => [data.r, data.g, data.b],
+            PixelFormat::Bgr => [data.b, data.g, data.r],
+            PixelFormat::U8 => [if data.to_u8() > 200 { 0xf } else { 0 }, 0, 0],
+            _ => {
+                panic!(
+                    "pixel format {:?} not supported for writing",
+                    self.info.pixel_format
+                );
+            }
+        };
+
+        // Convert the color slice to the correct length
+        let data: Vec<u8> = color
+            .iter()
+            .cloned()
+            .cycle()
+            .take(max_width * bytes_per_pixel)
+            .collect();
+
+        self.framebuffer[start_offset..start_offset + max_width * bytes_per_pixel]
+            .copy_from_slice(&data);
+    }
+
     pub fn draw_rect(
         &mut self,
         top_left: (usize, usize),
         bottom_right: (usize, usize),
         color: Color,
     ) {
-        for x in top_left.0..=bottom_right.0 {
-            for y in top_left.1..=bottom_right.1 {
-                self.write_pixel(x, y, color);
-            }
+        for y in top_left.1..=bottom_right.1 {
+            self.write_pixel_row(top_left.0, bottom_right.0, y, &color);
         }
     }
 
@@ -356,10 +460,9 @@ impl FrameBufferWriter {
         bottom_right: (usize, usize),
         color: Color,
     ) {
-        for x in top_left.0..=bottom_right.0 {
-            self.write_pixel(x, top_left.1, color);
-            self.write_pixel(x, bottom_right.1, color);
-        }
+        self.write_pixel_row(top_left.0, bottom_right.0, top_left.1, &color);
+        self.write_pixel_row(top_left.0, bottom_right.0, bottom_right.1, &color);
+
         for y in top_left.1..=bottom_right.1 {
             self.write_pixel(top_left.0, y, color);
             self.write_pixel(bottom_right.0, y, color);

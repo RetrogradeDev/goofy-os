@@ -103,6 +103,8 @@ pub fn run_desktop() -> ! {
         filled: true,
     });
 
+    serial_println!("Screen size: {}x{}", screen_size.0, screen_size.1);
+
     let mut keyboard = Keyboard::new(ScancodeSet1::new(), layouts::Azerty, HandleControl::Ignore);
 
     loop {
