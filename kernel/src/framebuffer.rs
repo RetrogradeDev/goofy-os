@@ -62,6 +62,8 @@ const CURSOR_ROWS: [(isize, isize); 3] = [
 const CURSOR_ROW_OFFSET: usize = 1; // Offset for the cursor rows from the top of the cursor
 const CURSOR_COLOR: Color = Color::new(0, 0, 255);
 
+const TEXT_COLOR: Color = Color::new(255, 255, 150);
+
 /// Constants for the usage of the [`noto_sans_mono_bitmap`] crate.
 mod font_constants {
     use super::*;
@@ -210,16 +212,36 @@ impl FrameBufferWriter {
     /// Prints a rendered char into the framebuffer.
     /// Updates `self.x_pos`.
     fn write_rendered_char(&mut self, rendered_char: RasterizedChar) {
+        self.write_rendered_char_at_pos(self.x_pos, self.y_pos, &rendered_char, TEXT_COLOR, true);
+        self.x_pos += rendered_char.width() + LETTER_SPACING;
+    }
+
+    fn write_rendered_char_at_pos(
+        &mut self,
+        pos_x: usize,
+        pos_y: usize,
+        rendered_char: &RasterizedChar,
+        color: Color,
+        fill_bg: bool,
+    ) {
         for (y, row) in rendered_char.raster().iter().enumerate() {
             for (x, byte) in row.iter().enumerate() {
+                if byte == &0 && !fill_bg {
+                    continue;
+                }
+
+                let byte = *byte as f32 / 255.0;
                 self.write_pixel(
-                    self.x_pos + x,
-                    self.y_pos + y,
-                    Color::new(*byte, *byte, *byte / 2), // Yellow-ish color
+                    pos_x + x,
+                    pos_y + y,
+                    Color::new(
+                        (color.r as f32 * byte) as u8,
+                        (color.g as f32 * byte) as u8,
+                        (color.b as f32 * byte) as u8,
+                    ),
                 );
             }
         }
-        self.x_pos += rendered_char.width() + LETTER_SPACING;
     }
 
     pub fn write_pixel(&mut self, x: usize, y: usize, color: Color) {
@@ -466,6 +488,16 @@ impl FrameBufferWriter {
         for y in top_left.1..=bottom_right.1 {
             self.write_pixel(top_left.0, y, color);
             self.write_pixel(bottom_right.0, y, color);
+        }
+    }
+
+    pub fn draw_raw_text(&mut self, text: &str, x: usize, y: usize, color: Color, fill_bg: bool) {
+        let mut x_offset = x;
+        for c in text.chars() {
+            let rendered_char = get_char_raster(c);
+
+            self.write_rendered_char_at_pos(x_offset, y, &rendered_char, color, fill_bg);
+            x_offset += LETTER_SPACING + rendered_char.width(); // Move to the next character position
         }
     }
 }

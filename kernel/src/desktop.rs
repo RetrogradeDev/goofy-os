@@ -2,7 +2,9 @@ use crate::{
     framebuffer::{self, SCREEN_SIZE},
     print, serial_println,
     surface::{Shape, Surface},
+    time::get_utc_time,
 };
+use alloc::{format, string::ToString};
 use pc_keyboard::{DecodedKey, HandleControl, Keyboard, ScancodeSet1, layouts};
 
 use conquer_once::spin::OnceCell;
@@ -93,8 +95,10 @@ pub fn run_desktop() -> ! {
         .expect("Mouse state queue not initialized");
 
     let screen_size = *SCREEN_SIZE.get().unwrap();
-    let mut taskbar_surface = Surface::new(screen_size.0 as usize, screen_size.1 as usize);
-    taskbar_surface.add_shape(Shape::Rectangle {
+    let mut desktop = Surface::new(screen_size.0 as usize, screen_size.1 as usize);
+
+    // Taskbar
+    desktop.add_shape(Shape::Rectangle {
         x: 0,
         y: screen_size.1 as usize - 30,
         width: screen_size.0 as usize,
@@ -103,12 +107,43 @@ pub fn run_desktop() -> ! {
         filled: true,
     });
 
+    // Time and date background
+    desktop.add_shape(Shape::Rectangle {
+        x: screen_size.0 as usize - 102,
+        y: screen_size.1 as usize - 28,
+        width: 100,
+        height: 26,
+        color: framebuffer::Color::new(0, 0, 0),
+        filled: true,
+    });
+
+    // Time
+    let time_shape_idx = desktop.add_shape(Shape::Text {
+        x: screen_size.0 as usize - 100,
+        y: screen_size.1 as usize - 28,
+        content: "22:42".to_string(),
+        color: framebuffer::Color::new(255, 255, 255),
+        fill_bg: false,
+    });
+
+    // Date
+    let date_shape_idx = desktop.add_shape(Shape::Text {
+        x: screen_size.0 as usize - 100,
+        y: screen_size.1 as usize - 16,
+        content: "8/15/2025".to_string(),
+        color: framebuffer::Color::new(255, 255, 255),
+        fill_bg: false,
+    });
+
     serial_println!("Screen size: {}x{}", screen_size.0, screen_size.1);
 
     let mut keyboard = Keyboard::new(ScancodeSet1::new(), layouts::Azerty, HandleControl::Ignore);
 
+    let time_update_ticks = 60 * 15; // FPS is somewhere between 60 and 50 (hard to test)
+    let mut ticks = 0u64;
+
     loop {
-        for _ in 0..5000 {
+        for _ in 0..10000 {
             // Poll for scancodes
             if let Some(scancode) = scancode_queue.pop() {
                 if let Ok(Some(key_event)) = keyboard.add_byte(scancode) {
@@ -126,6 +161,28 @@ pub fn run_desktop() -> ! {
             }
         }
 
+        if ticks % time_update_ticks == 0 {
+            let raw_time = get_utc_time();
+
+            // Update time
+            if let Some(shape) = desktop.shapes.get_mut(time_shape_idx) {
+                if let Shape::Text { content, .. } = shape {
+                    let time_str = format!("{:02}:{:02}", raw_time.hours, raw_time.minutes);
+
+                    *content = time_str;
+                }
+            }
+
+            // Update date
+            if let Some(shape) = desktop.shapes.get_mut(date_shape_idx) {
+                if let Shape::Text { content, .. } = shape {
+                    let date_str = format!("{}/{}/{}", raw_time.day, raw_time.month, raw_time.year);
+
+                    *content = date_str;
+                }
+            }
+        }
+
         // Draw desktop
         without_interrupts(|| {
             if let Some(fb) = framebuffer::FRAMEBUFFER.get() {
@@ -136,10 +193,12 @@ pub fn run_desktop() -> ! {
                     mouse_state.has_moved = false;
                 }
 
-                taskbar_surface.render(&mut fb_lock);
+                desktop.render(&mut fb_lock);
             } else {
                 serial_println!("Framebuffer not initialized");
             }
         });
+
+        ticks += 1;
     }
 }

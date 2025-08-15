@@ -1,4 +1,4 @@
-use alloc::vec::Vec;
+use alloc::{string::String, vec::Vec};
 
 use crate::framebuffer::{Color, FrameBufferWriter};
 
@@ -10,6 +10,13 @@ pub enum Shape {
         height: usize,
         color: Color,
         filled: bool,
+    },
+    Text {
+        x: usize,
+        y: usize,
+        content: String,
+        color: Color,
+        fill_bg: bool,
     },
 }
 
@@ -34,6 +41,15 @@ impl Shape {
                     );
                 }
             }
+            Shape::Text {
+                x,
+                y,
+                content,
+                color,
+                fill_bg,
+            } => {
+                framebuffer.draw_raw_text(content, *x, *y, *color, *fill_bg);
+            }
         }
     }
 }
@@ -55,9 +71,11 @@ impl Surface {
         }
     }
 
-    pub fn add_shape(&mut self, shape: Shape) {
+    pub fn add_shape(&mut self, shape: Shape) -> usize {
         self.shapes.push(shape);
         self.is_dirty = true;
+
+        return self.shapes.len() - 1;
     }
 
     pub fn render(&mut self, framebuffer: &mut FrameBufferWriter) {
