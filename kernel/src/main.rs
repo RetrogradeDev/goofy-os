@@ -71,7 +71,11 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     #[cfg(test)]
     test_main();
 
-    serial_println!("Running desktop...");
+    serial_println!("Current UTC time: {:#?}", kernel::time::get_utc_time());
+    serial_println!(
+        "Milliseconds since epoch: {}",
+        kernel::time::get_ms_since_epoch()
+    );
 
     // The kernel should continue running and let the scheduler handle task execution
     interrupts::enable();

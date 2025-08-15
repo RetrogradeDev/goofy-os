@@ -24,6 +24,7 @@ pub mod memory;
 pub mod serial;
 pub mod surface;
 pub mod task;
+pub mod time;
 
 use bootloader_api::config::{BootloaderConfig, Mapping};
 
