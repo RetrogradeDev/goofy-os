@@ -1,11 +1,11 @@
-use crate::{hlt_loop, print, println, serial_println};
+use crate::{hlt_loop, println, serial_println};
 use lazy_static::lazy_static;
 use pic8259::ChainedPics;
 use ps2_mouse::{Mouse, MouseState};
 use spin::{self, lazy::Lazy};
 use spinning_top::Spinlock;
 use x86_64::{
-    instructions::{interrupts::without_interrupts, port::PortReadOnly},
+    instructions::port::PortReadOnly,
     structures::idt::{InterruptDescriptorTable, InterruptStackFrame, PageFaultErrorCode},
 };
 
@@ -68,7 +68,7 @@ pub fn init_mouse() {
 
 // This will be fired when a packet is finished being processed.
 fn on_complete(mouse_state: MouseState) {
-    crate::desktop::add_mouse_state(mouse_state);
+    crate::desktop::input::add_mouse_state(mouse_state);
 }
 
 // An example interrupt based on https://os.phil-opp.com/hardware-interrupts/. The ps2 mouse is configured to fire
@@ -151,7 +151,7 @@ extern "x86-interrupt" fn keyboard_interrupt_handler(_stack_frame: InterruptStac
     let mut port = Port::new(0x60);
     let scancode: u8 = unsafe { port.read() };
     // crate::task::keyboard::add_scancode(scancode);
-    crate::desktop::add_scancode(scancode);
+    crate::desktop::input::add_scancode(scancode);
 
     unsafe {
         PICS.lock()

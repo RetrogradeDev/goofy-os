@@ -9,7 +9,7 @@ use core::panic::PanicInfo;
 extern crate alloc;
 
 use bootloader_api::{BootInfo, entry_point};
-use kernel::{desktop::run_desktop, memory::BootInfoFrameAllocator, println, serial_println};
+use kernel::{desktop::main::run_desktop, memory::BootInfoFrameAllocator, println, serial_println};
 
 use bootloader_api::config::{BootloaderConfig, Mapping};
 use x86_64::instructions::interrupts;
