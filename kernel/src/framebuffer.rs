@@ -395,7 +395,10 @@ impl FrameBufferWriter {
         for (i, (start_x, end_x)) in CURSOR_ROWS.iter().enumerate() {
             let cursor_y = start_y as isize + i as isize;
 
-            let count = (end_x - start_x + 1) as usize;
+            let count = (end_x - start_x + 1)
+                .min(self.width() as isize - x as isize - start_x)
+                .max(0) as usize;
+
             let start_x = x as isize + start_x;
 
             let bytes_per_pixel = self.info.bytes_per_pixel;
@@ -404,15 +407,13 @@ impl FrameBufferWriter {
                 continue; // Skip out-of-bounds rows
             }
 
-            if start_x < 0
-                || start_x + count as isize * bytes_per_pixel as isize > self.width() as isize
-            {
-                continue; // Skip out-of-bounds columns
-            }
-
-            let row = self
-                .read_raw_pixel_row(start_x as usize, cursor_y as usize, count)
-                .to_vec();
+            let row = if start_x < 0 || start_x > self.width() as isize {
+                // Just black
+                alloc::vec![0; count * bytes_per_pixel]
+            } else {
+                self.read_raw_pixel_row(start_x as usize, cursor_y as usize, count)
+                    .to_vec()
+            };
 
             self.cursor_background.saved_pixels[idx..idx + count * bytes_per_pixel]
                 .copy_from_slice(&row);
@@ -428,17 +429,19 @@ impl FrameBufferWriter {
         for (i, (start_x, end_x)) in CURSOR_ROWS.iter().enumerate() {
             let cursor_y = start_y as isize + i as isize;
 
-            let count = (end_x - start_x + 1) as usize;
+            let count = (end_x - start_x + 1)
+                .min(self.width() as isize - start_x - prev_pos.0 as isize)
+                .max(0) as usize;
+
             let start_x = prev_pos.0 as isize + start_x;
+
             let bytes_per_pixel = self.info.bytes_per_pixel;
 
             if cursor_y < 0 || cursor_y >= self.height() as isize {
                 continue; // Skip out-of-bounds rows
             }
-            if start_x < 0
-                || start_x + count as isize * bytes_per_pixel as isize > self.width() as isize
-            {
-                continue; // Skip out-of-bounds columns
+            if start_x < 0 || start_x + count as isize > self.width() as isize {
+                continue;
             }
 
             let row =
@@ -464,7 +467,8 @@ impl FrameBufferWriter {
 
     /// Writes a horizontal line of pixels at once.
     fn write_pixel_row(&mut self, x1: usize, x2: usize, y: usize, data: &Color) {
-        if y >= self.height() || x1 >= self.width() || x2 >= self.width() {
+        let x2 = x2.min(self.width() - 1); // Ensure x2 is within bounds
+        if y >= self.height() || x1 >= self.width() {
             return;
         }
 

@@ -14,6 +14,7 @@ use x86_64::instructions::interrupts::without_interrupts;
 
 static SCANCODE_QUEUE: OnceCell<ArrayQueue<u8>> = OnceCell::uninit();
 static STATE_QUEUE: OnceCell<ArrayQueue<MouseState>> = OnceCell::uninit();
+static CLICK_QUEUE: OnceCell<ArrayQueue<(i16, i16)>> = OnceCell::uninit();
 
 pub fn add_scancode(scancode: u8) {
     if let Some(queue) = SCANCODE_QUEUE.get() {
@@ -48,13 +49,18 @@ pub fn init_queues() {
     STATE_QUEUE
         .try_init_once(|| ArrayQueue::new(100))
         .expect("Mouse state queue should only be initialized once");
+    CLICK_QUEUE
+        .try_init_once(|| ArrayQueue::new(20))
+        .expect("Click queue should only be initialized once");
 }
 
 pub struct CurrentMouseState {
     pub x: i16,
     pub y: i16,
-    pub has_moved: bool,
+    pub left_button_down: bool,
+    pub right_button_down: bool,
 
+    pub has_moved: bool,
     _screen_size: (u16, u16),
 }
 
@@ -64,12 +70,18 @@ impl CurrentMouseState {
         CurrentMouseState {
             x: (screen_size.0 / 2) as i16,
             y: (screen_size.1 / 2) as i16,
-            has_moved: false,
+            left_button_down: false,
+            right_button_down: false,
+            has_moved: true, // Ensure the cursor is drawn initially
             _screen_size: screen_size,
         }
     }
 
     pub fn update(&mut self, state: MouseState) {
+        let prev_x = self.x;
+        let prev_y = self.y;
+        let prev_left_down = self.left_button_down;
+
         self.x += state.get_x();
         self.y -= state.get_y();
 
@@ -77,7 +89,27 @@ impl CurrentMouseState {
         self.x = self.x.clamp(0, self._screen_size.0 as i16 - 1);
         self.y = self.y.clamp(0, self._screen_size.1 as i16 - 1);
 
-        self.has_moved = true;
+        self.left_button_down = state.left_button_down();
+        self.right_button_down = state.right_button_down();
+
+        self.has_moved = self.x != prev_x || self.y != prev_y; // TODO: fix this
+
+        // Detect click: mouse down, no moving, mouse up
+        if prev_left_down && !self.left_button_down && !self.has_moved {
+            if let Some(queue) = CLICK_QUEUE.get() {
+                if queue.push((self.x, self.y)).is_err() {
+                    print!(
+                        "Click queue is full, dropping click at: ({}, {})",
+                        self.x, self.y
+                    );
+                }
+            } else {
+                print!(
+                    "Click queue not initialized, cannot add click at: ({}, {})",
+                    self.x, self.y
+                );
+            }
+        }
     }
 }
 
@@ -86,6 +118,9 @@ pub fn run_desktop() -> ! {
     init_queues();
 
     let mut mouse_state = CurrentMouseState::new();
+
+    let click_queue = CLICK_QUEUE.get().expect("Click queue not initialized");
+
     let scancode_queue = SCANCODE_QUEUE
         .try_get()
         .expect("Scancode queue not initialized");
@@ -97,6 +132,8 @@ pub fn run_desktop() -> ! {
     let screen_size = *SCREEN_SIZE.get().unwrap();
     let mut desktop = Surface::new(screen_size.0 as usize, screen_size.1 as usize);
 
+    let start_button_region = (0, screen_size.1 as usize - 30, 80, 30);
+
     // Taskbar
     desktop.add_shape(Shape::Rectangle {
         x: 0,
@@ -105,6 +142,29 @@ pub fn run_desktop() -> ! {
         height: 30,
         color: framebuffer::Color::new(255, 0, 0),
         filled: true,
+        hide: false,
+    });
+
+    // Start button
+    desktop.add_shape(Shape::Rectangle {
+        x: start_button_region.0,
+        y: start_button_region.1,
+        width: start_button_region.2,
+        height: start_button_region.3,
+        color: framebuffer::Color::new(255, 0, 255),
+        filled: true,
+        hide: false,
+    });
+
+    // Start menu placeholder
+    let start_menu_idx = desktop.add_shape(Shape::Rectangle {
+        x: 0,
+        y: screen_size.1 as usize - 330,
+        width: 200,
+        height: 300,
+        color: framebuffer::Color::new(0, 255, 0),
+        filled: true,
+        hide: true,
     });
 
     // Time and date background
@@ -115,6 +175,7 @@ pub fn run_desktop() -> ! {
         height: 26,
         color: framebuffer::Color::new(0, 0, 0),
         filled: true,
+        hide: false,
     });
 
     // Time
@@ -124,6 +185,7 @@ pub fn run_desktop() -> ! {
         content: "22:42".to_string(),
         color: framebuffer::Color::new(255, 255, 255),
         fill_bg: false,
+        hide: false,
     });
 
     // Date
@@ -133,6 +195,7 @@ pub fn run_desktop() -> ! {
         content: "8/15/2025".to_string(),
         color: framebuffer::Color::new(255, 255, 255),
         fill_bg: false,
+        hide: false,
     });
 
     serial_println!("Screen size: {}x{}", screen_size.0, screen_size.1);
@@ -181,6 +244,29 @@ pub fn run_desktop() -> ! {
                     *content = date_str;
                 }
             }
+
+            desktop.is_dirty = true;
+        }
+
+        while let Some((x, y)) = click_queue.pop() {
+            let x = x as usize;
+            let y = y as usize;
+
+            // Check if click is within the start button region
+            if x >= start_button_region.0
+                && x < start_button_region.0 + start_button_region.2
+                && y >= start_button_region.1
+                && y < start_button_region.1 + start_button_region.3
+            {
+                // Toggle start menu visibility
+                if let Some(shape) = desktop.shapes.get_mut(start_menu_idx) {
+                    if let Shape::Rectangle { hide, .. } = shape {
+                        *hide = !*hide;
+                    }
+                }
+
+                desktop.is_dirty = true;
+            }
         }
 
         // Draw desktop
@@ -188,12 +274,12 @@ pub fn run_desktop() -> ! {
             if let Some(fb) = framebuffer::FRAMEBUFFER.get() {
                 let mut fb_lock = fb.lock();
 
-                if mouse_state.has_moved {
+                let did_render = desktop.render(&mut fb_lock); // TODO: Remove this when we use regions
+
+                if mouse_state.has_moved || did_render {
                     fb_lock.draw_mouse_cursor(mouse_state.x as usize, mouse_state.y as usize);
                     mouse_state.has_moved = false;
                 }
-
-                desktop.render(&mut fb_lock);
             } else {
                 serial_println!("Framebuffer not initialized");
             }

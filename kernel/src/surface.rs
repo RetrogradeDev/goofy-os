@@ -10,6 +10,8 @@ pub enum Shape {
         height: usize,
         color: Color,
         filled: bool,
+
+        hide: bool,
     },
     Text {
         x: usize,
@@ -17,6 +19,8 @@ pub enum Shape {
         content: String,
         color: Color,
         fill_bg: bool,
+
+        hide: bool,
     },
 }
 
@@ -30,7 +34,12 @@ impl Shape {
                 height,
                 color,
                 filled,
+                hide,
             } => {
+                if *hide {
+                    return;
+                }
+
                 if *filled {
                     framebuffer.draw_rect((*x, *y), (*x + width - 1, *y + height - 1), *color);
                 } else {
@@ -47,7 +56,12 @@ impl Shape {
                 content,
                 color,
                 fill_bg,
+                hide,
             } => {
+                if *hide {
+                    return;
+                }
+
                 framebuffer.draw_raw_text(content, *x, *y, *color, *fill_bg);
             }
         }
@@ -78,12 +92,17 @@ impl Surface {
         return self.shapes.len() - 1;
     }
 
-    pub fn render(&mut self, framebuffer: &mut FrameBufferWriter) {
+    pub fn render(&mut self, framebuffer: &mut FrameBufferWriter) -> bool {
         if self.is_dirty {
+            framebuffer.fill(); // TODO: Check if "regions" are dirty instead of full framebuffer, this is extremely slow
+
             for shape in &self.shapes {
                 shape.render(framebuffer);
             }
             self.is_dirty = false;
+
+            return true;
         }
+        false
     }
 }

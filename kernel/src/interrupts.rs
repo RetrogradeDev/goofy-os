@@ -136,7 +136,7 @@ extern "x86-interrupt" fn double_fault_handler(
 }
 
 extern "x86-interrupt" fn timer_handler(_stack_frame: InterruptStackFrame) {
-    print!(".");
+    // print!(".");
 
     // Notify the Programmable Interrupt Controller (PIC) that the interrupt has been handled
     unsafe {
