@@ -4,6 +4,7 @@
 #![feature(custom_test_frameworks)]
 #![test_runner(crate::test_runner)]
 #![reexport_test_harness_main = "test_main"]
+#![feature(const_slice_make_iter)]
 
 #[cfg(test)]
 use bootloader_api::{BootInfo, entry_point};

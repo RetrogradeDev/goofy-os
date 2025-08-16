@@ -53,13 +53,41 @@ const LETTER_SPACING: usize = 0;
 /// Padding from the border. Prevent that font is too close to border.
 const BORDER_PADDING: usize = 1;
 
-const CURSOR_SIZE: usize = 5; // Size of the crosshair cursor
-const CURSOR_ROWS: [(isize, isize); 3] = [
-    (0, 0),  // Upper row
-    (-1, 1), // Middle row
-    (0, 0),  // Lower row
+const fn calculate_cursor_bg_data_size(rows: &[(isize, isize)]) -> usize {
+    let mut sum = 0;
+    let mut i = 0;
+
+    while i < rows.len() {
+        // For some weird reason rust doesn't allow iter, map or for
+        let (start_x, end_x) = rows[i];
+        sum += (end_x - start_x + 1) as usize;
+        i += 1;
+    }
+    sum
+}
+
+const CURSOR_ROWS: [(isize, isize); 17] = [
+    (0, 0), // Tip of the triangle
+    (0, 1),
+    (0, 3),
+    (0, 4),
+    (1, 6),
+    (1, 7),
+    (1, 9),
+    (1, 10),
+    (1, 11),
+    (2, 13),
+    (2, 14),
+    (2, 13),
+    (2, 11),
+    (2, 9),
+    (2, 7),
+    (3, 5),
+    (3, 3),
 ];
-const CURSOR_ROW_OFFSET: usize = 1; // Offset for the cursor rows from the top of the cursor
+
+const CURSOR_BG_DATA_SIZE: usize = calculate_cursor_bg_data_size(&CURSOR_ROWS);
+const CURSOR_ROW_OFFSET: usize = 0; // Offset for the cursor rows from the top of the cursor
 const CURSOR_COLOR: Color = Color::new(0, 0, 255);
 
 const TEXT_COLOR: Color = Color::new(255, 255, 150);
@@ -102,14 +130,18 @@ pub struct Color {
 }
 
 struct CursorBackground {
-    saved_pixels: [u8; CURSOR_SIZE * 3], // TODO: Don't hardcode this
+    saved_pixels: [u8; CURSOR_BG_DATA_SIZE * 3], // TODO: Don't hardcode this
     previous_pos: Option<(usize, usize)>,
 }
 
 impl CursorBackground {
-    fn new() -> Self {
+    fn new(bytes_per_pixel: usize) -> Self {
+        if bytes_per_pixel != 3 {
+            panic!("Cursor background only supports 3 bytes per pixel (RGB).");
+        }
+
         Self {
-            saved_pixels: [0; CURSOR_SIZE * 3], // 3 bytes per pixel for RGB
+            saved_pixels: [0; CURSOR_BG_DATA_SIZE * 3],
             previous_pos: None,
         }
     }
@@ -150,7 +182,7 @@ impl FrameBufferWriter {
             info,
             x_pos: 0,
             y_pos: 0,
-            cursor_background: CursorBackground::new(),
+            cursor_background: CursorBackground::new(info.bytes_per_pixel),
         };
         logger.clear();
         logger
