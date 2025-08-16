@@ -88,7 +88,7 @@ const CURSOR_ROWS: [(isize, isize); 17] = [
 
 const CURSOR_BG_DATA_SIZE: usize = calculate_cursor_bg_data_size(&CURSOR_ROWS);
 const CURSOR_ROW_OFFSET: usize = 0; // Offset for the cursor rows from the top of the cursor
-const CURSOR_COLOR: Color = Color::new(0, 0, 255);
+const CURSOR_COLOR: Color = Color::BLUE;
 
 const TEXT_COLOR: Color = Color::new(255, 255, 150);
 
@@ -129,6 +129,39 @@ pub struct Color {
     pub b: u8,
 }
 
+impl Color {
+    pub const fn new(r: u8, g: u8, b: u8) -> Self {
+        Self { r, g, b }
+    }
+
+    pub const BLACK: Color = Color { r: 0, g: 0, b: 0 };
+    pub const GRAY: Color = Color {
+        r: 150,
+        g: 150,
+        b: 150,
+    };
+    pub const WHITE: Color = Color {
+        r: 255,
+        g: 255,
+        b: 255,
+    };
+    pub const RED: Color = Color { r: 255, g: 0, b: 0 };
+    pub const GREEN: Color = Color { r: 0, g: 255, b: 0 };
+    pub const BLUE: Color = Color { r: 0, g: 0, b: 255 };
+
+    pub fn to_u8(&self) -> u8 {
+        (self.r + self.g + self.b) / 3
+    }
+
+    pub fn to_rgb(&self) -> [u8; 3] {
+        [self.r, self.g, self.b]
+    }
+
+    pub fn to_bgr(&self) -> [u8; 3] {
+        [self.b, self.g, self.r]
+    }
+}
+
 struct CursorBackground {
     saved_pixels: [u8; CURSOR_BG_DATA_SIZE * 3], // TODO: Don't hardcode this
     previous_pos: Option<(usize, usize)>,
@@ -144,24 +177,6 @@ impl CursorBackground {
             saved_pixels: [0; CURSOR_BG_DATA_SIZE * 3],
             previous_pos: None,
         }
-    }
-}
-
-impl Color {
-    pub const fn new(r: u8, g: u8, b: u8) -> Self {
-        Self { r, g, b }
-    }
-
-    pub fn to_u8(&self) -> u8 {
-        (self.r + self.g + self.b) / 3
-    }
-
-    pub fn to_rgb(&self) -> [u8; 3] {
-        [self.r, self.g, self.b]
-    }
-
-    pub fn to_bgr(&self) -> [u8; 3] {
-        [self.b, self.g, self.r]
     }
 }
 
@@ -197,8 +212,8 @@ impl FrameBufferWriter {
         self.x_pos = BORDER_PADDING;
     }
 
-    pub fn fill(&mut self) {
-        self.framebuffer.fill(0);
+    pub fn fill(&mut self, brightness: u8) {
+        self.framebuffer.fill(brightness);
     }
 
     /// Erases all text on the screen. Resets `self.x_pos` and `self.y_pos`.
@@ -303,7 +318,7 @@ impl FrameBufferWriter {
 
     pub fn read_pixel(&self, x: usize, y: usize) -> Color {
         if x >= self.width() || y >= self.height() {
-            return Color::new(0, 0, 0); // Out of bounds, return black
+            return Color::BLACK; // Out of bounds, return black
         }
 
         let pixel_offset = y * self.info.stride + x;

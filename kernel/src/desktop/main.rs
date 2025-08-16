@@ -1,6 +1,9 @@
 use crate::{
-    desktop::input::{CLICK_QUEUE, CurrentMouseState, SCANCODE_QUEUE, STATE_QUEUE, init_queues},
-    framebuffer::{self, SCREEN_SIZE},
+    desktop::{
+        input::{CLICK_QUEUE, CurrentMouseState, SCANCODE_QUEUE, STATE_QUEUE, init_queues},
+        window_manager::{Window, WindowManager},
+    },
+    framebuffer::{self, Color, SCREEN_SIZE},
     print, serial_println,
     surface::{Shape, Surface},
     time::get_utc_time,
@@ -16,6 +19,10 @@ pub fn run_desktop() -> ! {
 
     let mut mouse_state = CurrentMouseState::new();
 
+    let mut window_manager = WindowManager::new();
+
+    window_manager.add_window(Window::new(100, 100, 800, 600, 1, "My Window".to_string()));
+
     let click_queue = CLICK_QUEUE.get().expect("Click queue not initialized");
 
     let scancode_queue = SCANCODE_QUEUE
@@ -27,7 +34,8 @@ pub fn run_desktop() -> ! {
         .expect("Mouse state queue not initialized");
 
     let screen_size = *SCREEN_SIZE.get().unwrap();
-    let mut desktop = Surface::new(screen_size.0 as usize, screen_size.1 as usize);
+    let mut desktop = Surface::new(screen_size.0 as usize, screen_size.1 as usize, Color::GRAY);
+    desktop.just_fill_bg = true;
 
     let start_button_region = (0, screen_size.1 as usize - 30, 80, 30);
 
@@ -37,7 +45,7 @@ pub fn run_desktop() -> ! {
         y: screen_size.1 as usize - 30,
         width: screen_size.0 as usize,
         height: 30,
-        color: framebuffer::Color::new(255, 0, 0),
+        color: framebuffer::Color::RED,
         filled: true,
         hide: false,
     });
@@ -59,7 +67,7 @@ pub fn run_desktop() -> ! {
         y: screen_size.1 as usize - 330,
         width: 200,
         height: 300,
-        color: framebuffer::Color::new(0, 255, 0),
+        color: framebuffer::Color::GREEN,
         filled: true,
         hide: true,
     });
@@ -70,7 +78,7 @@ pub fn run_desktop() -> ! {
         y: screen_size.1 as usize - 28,
         width: 100,
         height: 26,
-        color: framebuffer::Color::new(0, 0, 0),
+        color: framebuffer::Color::BLACK,
         filled: true,
         hide: false,
     });
@@ -80,7 +88,7 @@ pub fn run_desktop() -> ! {
         x: screen_size.0 as usize - 100,
         y: screen_size.1 as usize - 28,
         content: "22:42".to_string(),
-        color: framebuffer::Color::new(255, 255, 255),
+        color: framebuffer::Color::WHITE,
         fill_bg: false,
         hide: false,
     });
@@ -90,7 +98,7 @@ pub fn run_desktop() -> ! {
         x: screen_size.0 as usize - 100,
         y: screen_size.1 as usize - 16,
         content: "8/15/2025".to_string(),
-        color: framebuffer::Color::new(255, 255, 255),
+        color: framebuffer::Color::WHITE,
         fill_bg: false,
         hide: false,
     });
@@ -171,8 +179,10 @@ pub fn run_desktop() -> ! {
             if let Some(fb) = framebuffer::FRAMEBUFFER.get() {
                 let mut fb_lock = fb.lock();
 
-                let did_render = desktop.render(&mut fb_lock); // TODO: Remove this when we use regions
+                let did_render = desktop.render(&mut fb_lock, 0, 0, false);
+                let did_render = window_manager.render(&mut fb_lock, did_render);
 
+                // TODO: Remove did_render when we use regions
                 if mouse_state.has_moved || did_render {
                     fb_lock.draw_mouse_cursor(mouse_state.x as usize, mouse_state.y as usize);
                     mouse_state.has_moved = false;
