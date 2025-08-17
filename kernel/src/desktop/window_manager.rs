@@ -139,8 +139,12 @@ impl WindowManager {
     }
 
     /// Handles mouse click events on windows.
-    /// Returns: (handled, force_redraw)
-    pub fn handle_mouse_click(&mut self, x: i16, y: i16) -> (bool, bool) {
+    /// Returns: (handled, dirty_region)
+    pub fn handle_mouse_click(
+        &mut self,
+        x: i16,
+        y: i16,
+    ) -> (bool, Option<(usize, usize, usize, usize)>) {
         for window in &mut self.windows {
             if x as usize >= window.x
                 && x as usize <= window.x + window.width
@@ -152,7 +156,7 @@ impl WindowManager {
                     let y = (y as usize).saturating_sub(window.y);
 
                     calculator.handle_mouse_click(x, y);
-                    return (true, false);
+                    return (true, None);
                 }
             }
         }
@@ -165,13 +169,19 @@ impl WindowManager {
                 && y as usize <= window.y
             {
                 let window_id = window.id; // Rust borrowing checker goes brrr
+                let bounds = (
+                    window.x - 1,
+                    window.y - 20,
+                    window.width + 2,
+                    window.height + 21,
+                ); // Don't forget the outline and title bar :)
 
                 self.windows.retain(|w| w.id != window_id);
-                return (true, true);
+                return (true, Some(bounds));
             }
         }
 
-        (false, false)
+        (false, None)
     }
 }
 

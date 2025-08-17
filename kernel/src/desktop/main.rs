@@ -172,29 +172,20 @@ pub fn run_desktop() -> ! {
             let raw_time = get_utc_time();
 
             // Update time
-            if let Some(shape) = desktop.shapes.get_mut(time_shape_idx) {
-                if let Shape::Text { content, .. } = shape {
-                    let time_str = format!("{:02}:{:02}", raw_time.hours, raw_time.minutes);
-
-                    *content = time_str;
-                }
-            }
+            let time_str = format!("{:02}:{:02}", raw_time.hours, raw_time.minutes);
+            desktop.update_text_content(time_shape_idx, time_str);
 
             // Update date
-            if let Some(shape) = desktop.shapes.get_mut(date_shape_idx) {
-                if let Shape::Text { content, .. } = shape {
-                    let date_str = format!("{}/{}/{}", raw_time.day, raw_time.month, raw_time.year);
-
-                    *content = date_str;
-                }
-            }
+            let date_str = format!("{}/{}/{}", raw_time.day, raw_time.month, raw_time.year);
+            desktop.update_text_content(date_shape_idx, date_str);
 
             desktop.is_dirty = true;
         }
 
         while let Some((x, y)) = click_queue.pop() {
-            let (mut handled, force_redraw) = window_manager.handle_mouse_click(x, y);
-            if force_redraw {
+            let (mut handled, redraw_region) = window_manager.handle_mouse_click(x, y);
+            if let Some((x, y, width, height)) = redraw_region {
+                desktop.force_dirty_region(x, y, width, height);
                 desktop.is_dirty = true;
             }
 
@@ -214,17 +205,8 @@ pub fn run_desktop() -> ! {
 
                             start_menu_open = false;
                             for (idx, label_idx, _, _, _, _, _) in &start_menu_entries {
-                                if let Some(shape) = desktop.shapes.get_mut(*idx) {
-                                    if let Shape::Rectangle { hide, .. } = shape {
-                                        *hide = true;
-                                    }
-                                }
-
-                                if let Some(label_shape) = desktop.shapes.get_mut(*label_idx) {
-                                    if let Shape::Text { hide, .. } = label_shape {
-                                        *hide = true;
-                                    }
-                                }
+                                desktop.hide_shape(*idx);
+                                desktop.hide_shape(*label_idx);
                             }
                             desktop.is_dirty = true;
 
@@ -249,15 +231,12 @@ pub fn run_desktop() -> ! {
 
                 // Update start menu entries visibility
                 for (idx, label_idx, _, _, _, _, _) in &start_menu_entries {
-                    if let Some(shape) = desktop.shapes.get_mut(*idx) {
-                        if let Shape::Rectangle { hide, .. } = shape {
-                            *hide = !start_menu_open;
-                        }
-                    }
-                    if let Some(label_shape) = desktop.shapes.get_mut(*label_idx) {
-                        if let Shape::Text { hide, .. } = label_shape {
-                            *hide = !start_menu_open;
-                        }
+                    if start_menu_open {
+                        desktop.show_shape(*idx);
+                        desktop.show_shape(*label_idx);
+                    } else {
+                        desktop.hide_shape(*idx);
+                        desktop.hide_shape(*label_idx);
                     }
                 }
 
@@ -271,6 +250,7 @@ pub fn run_desktop() -> ! {
                 let mut fb_lock = fb.lock();
 
                 let did_render = desktop.render(&mut fb_lock, 0, 0, false);
+                // TODO: Check did render overlapped/use the same surface
                 let did_render = window_manager.render(&mut fb_lock, did_render);
 
                 // TODO: Remove did_render when we use regions

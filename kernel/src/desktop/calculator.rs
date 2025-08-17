@@ -196,10 +196,7 @@ impl Calculator {
             return; // No change in display text, nothing to update
         }
 
-        let display_shape = surface.shapes.get_mut(self.display_idx).unwrap();
-        if let Shape::Text { content, .. } = display_shape {
-            *content = self.display_text.clone();
-        }
+        surface.update_text_content(self.display_idx, self.display_text.clone());
         surface.is_dirty = true;
 
         self.previous_display_text = self.display_text.clone();

@@ -1,6 +1,50 @@
-use alloc::{string::String, vec::Vec};
+use alloc::{string::String, vec, vec::Vec};
 
 use crate::framebuffer::{Color, FrameBufferWriter};
+
+#[derive(Debug, Clone, Copy)]
+pub struct Rect {
+    pub x: usize,
+    pub y: usize,
+    pub width: usize,
+    pub height: usize,
+}
+
+impl Rect {
+    pub fn new(x: usize, y: usize, width: usize, height: usize) -> Self {
+        Self {
+            x,
+            y,
+            width,
+            height,
+        }
+    }
+
+    pub fn intersects(&self, other: &Rect) -> bool {
+        self.x < other.x + other.width
+            && self.x + self.width > other.x
+            && self.y < other.y + other.height
+            && self.y + self.height > other.y
+    }
+
+    pub fn union(&self, other: &Rect) -> Rect {
+        let x1 = self.x.min(other.x);
+        let y1 = self.y.min(other.y);
+        let x2 = (self.x + self.width).max(other.x + other.width);
+        let y2 = (self.y + self.height).max(other.y + other.height);
+
+        Rect {
+            x: x1,
+            y: y1,
+            width: x2 - x1,
+            height: y2 - y1,
+        }
+    }
+
+    pub fn contains_point(&self, x: usize, y: usize) -> bool {
+        x >= self.x && x < self.x + self.width && y >= self.y && y < self.y + self.height
+    }
+}
 
 pub enum Shape {
     Rectangle {
@@ -25,6 +69,80 @@ pub enum Shape {
 }
 
 impl Shape {
+    pub fn get_bounds(&self) -> Rect {
+        match self {
+            Shape::Rectangle {
+                x,
+                y,
+                width,
+                height,
+                ..
+            } => Rect {
+                x: *x,
+                y: *y,
+                width: *width,
+                height: *height,
+            },
+            Shape::Text { x, y, content, .. } => {
+                // Approximate text bounds
+                let char_width = 8; // Approximate character width
+                let char_height = 16; // Approximate character height
+                Rect {
+                    x: *x,
+                    y: *y,
+                    width: content.len() * char_width,
+                    height: char_height,
+                }
+            }
+        }
+    }
+
+    pub fn intersects_rect(&self, rect: &Rect) -> bool {
+        if let Shape::Rectangle { hide: true, .. } | Shape::Text { hide: true, .. } = self {
+            return false;
+        }
+
+        self.get_bounds().intersects(rect)
+    }
+
+    pub fn set_position(&mut self, x: usize, y: usize) -> Rect {
+        let old_bounds = self.get_bounds();
+
+        match self {
+            Shape::Rectangle {
+                x: shape_x,
+                y: shape_y,
+                ..
+            } => {
+                *shape_x = x;
+                *shape_y = y;
+            }
+            Shape::Text {
+                x: shape_x,
+                y: shape_y,
+                ..
+            } => {
+                *shape_x = x;
+                *shape_y = y;
+            }
+        }
+
+        old_bounds.union(&self.get_bounds())
+    }
+
+    pub fn set_visibility(&mut self, visible: bool) -> Rect {
+        let bounds = self.get_bounds();
+        match self {
+            Shape::Rectangle { hide, .. } => {
+                *hide = !visible;
+            }
+            Shape::Text { hide, .. } => {
+                *hide = !visible;
+            }
+        }
+        bounds
+    }
+
     pub fn render(&self, framebuffer: &mut FrameBufferWriter, offset_x: usize, offset_y: usize) {
         match self {
             Shape::Rectangle {
@@ -70,6 +188,22 @@ impl Shape {
             }
         }
     }
+
+    pub fn render_clipped(
+        &self,
+        framebuffer: &mut FrameBufferWriter,
+        offset_x: usize,
+        offset_y: usize,
+        clip_rect: &Rect,
+    ) {
+        let shape_bounds = self.get_bounds();
+        if !shape_bounds.intersects(clip_rect) {
+            return;
+        }
+
+        // For now, just use regular render - clipping can be optimized later
+        self.render(framebuffer, offset_x, offset_y);
+    }
 }
 
 pub struct Surface {
@@ -77,8 +211,9 @@ pub struct Surface {
     pub height: usize,
     pub background_color: Color,
     pub just_fill_bg: bool,
-    pub shapes: Vec<Shape>,
+    shapes: Vec<Shape>,
     pub is_dirty: bool,
+    pub dirty_regions: Vec<Rect>,
 }
 
 impl Surface {
@@ -90,14 +225,222 @@ impl Surface {
             just_fill_bg: false,
             shapes: Vec::new(),
             is_dirty: true,
+            dirty_regions: vec![Rect::new(0, 0, width, height)], // Initially everything is dirty
         }
     }
 
-    pub fn add_shape(&mut self, shape: Shape) -> usize {
-        self.shapes.push(shape);
-        self.is_dirty = true;
+    pub fn mark_region_dirty(&mut self, region: Rect) {
+        // Merge overlapping dirty regions to avoid fragmentation
+        let mut merged = false;
+        for existing in &mut self.dirty_regions {
+            if existing.intersects(&region) {
+                *existing = existing.union(&region);
+                merged = true;
+                break;
+            }
+        }
 
-        return self.shapes.len() - 1;
+        if !merged {
+            self.dirty_regions.push(region);
+        }
+
+        self.is_dirty = true;
+    }
+
+    pub fn force_dirty_region(&mut self, x: usize, y: usize, width: usize, height: usize) {
+        self.mark_region_dirty(Rect::new(x, y, width, height));
+    }
+
+    pub fn force_full_redraw(&mut self) {
+        self.dirty_regions.clear();
+        self.dirty_regions
+            .push(Rect::new(0, 0, self.width, self.height));
+        self.is_dirty = true;
+    }
+
+    pub fn add_shape(&mut self, shape: Shape) -> usize {
+        let bounds = shape.get_bounds();
+        self.shapes.push(shape);
+        self.mark_region_dirty(bounds);
+        self.shapes.len() - 1
+    }
+
+    // Shape modification methods with automatic dirty tracking
+    pub fn move_shape(&mut self, shape_id: usize, new_x: usize, new_y: usize) -> bool {
+        if let Some(shape) = self.shapes.get_mut(shape_id) {
+            let dirty_region = shape.set_position(new_x, new_y);
+            self.mark_region_dirty(dirty_region);
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn hide_shape(&mut self, shape_id: usize) -> bool {
+        if let Some(shape) = self.shapes.get_mut(shape_id) {
+            let dirty_region = shape.set_visibility(false);
+            self.mark_region_dirty(dirty_region);
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn show_shape(&mut self, shape_id: usize) -> bool {
+        if let Some(shape) = self.shapes.get_mut(shape_id) {
+            let dirty_region = shape.set_visibility(true);
+            self.mark_region_dirty(dirty_region);
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn update_rectangle_size(
+        &mut self,
+        shape_id: usize,
+        new_width: usize,
+        new_height: usize,
+    ) -> bool {
+        if let Some(Shape::Rectangle { width, height, .. }) = self.shapes.get_mut(shape_id) {
+            let old_bounds = Rect {
+                x: 0,
+                y: 0,
+                width: *width,
+                height: *height,
+            }; // We'll get proper bounds after
+            *width = new_width;
+            *height = new_height;
+
+            // Get the actual shape bounds now
+            let shape_bounds = self.shapes[shape_id].get_bounds();
+            let dirty_bounds = Rect {
+                x: shape_bounds.x,
+                y: shape_bounds.y,
+                width: old_bounds.width.max(new_width),
+                height: old_bounds.height.max(new_height),
+            };
+            self.mark_region_dirty(dirty_bounds);
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn update_rectangle_color(&mut self, shape_id: usize, new_color: Color) -> bool {
+        if let Some(Shape::Rectangle { color, .. }) = self.shapes.get_mut(shape_id) {
+            *color = new_color;
+            let bounds = self.shapes[shape_id].get_bounds();
+            self.mark_region_dirty(bounds);
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn update_rectangle_filled(&mut self, shape_id: usize, filled: bool) -> bool {
+        if let Some(Shape::Rectangle {
+            filled: shape_filled,
+            ..
+        }) = self.shapes.get_mut(shape_id)
+        {
+            *shape_filled = filled;
+            let bounds = self.shapes[shape_id].get_bounds();
+            self.mark_region_dirty(bounds);
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn update_text_content(&mut self, shape_id: usize, new_content: String) -> bool {
+        if let Some(Shape::Text { content, .. }) = self.shapes.get_mut(shape_id) {
+            // Get old bounds before changing content
+            let old_len = content.len();
+            *content = new_content;
+
+            // Calculate dirty region based on old and new content size
+            let shape_bounds = self.shapes[shape_id].get_bounds();
+            let old_width = old_len * 8; // char_width
+            let dirty_bounds = Rect {
+                x: shape_bounds.x,
+                y: shape_bounds.y,
+                width: old_width.max(shape_bounds.width),
+                height: shape_bounds.height,
+            };
+            self.mark_region_dirty(dirty_bounds);
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn update_text_color(&mut self, shape_id: usize, new_color: Color) -> bool {
+        if let Some(Shape::Text { color, .. }) = self.shapes.get_mut(shape_id) {
+            *color = new_color;
+            let bounds = self.shapes[shape_id].get_bounds();
+            self.mark_region_dirty(bounds);
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn update_text_fill_bg(&mut self, shape_id: usize, fill_bg: bool) -> bool {
+        if let Some(Shape::Text {
+            fill_bg: shape_fill_bg,
+            ..
+        }) = self.shapes.get_mut(shape_id)
+        {
+            *shape_fill_bg = fill_bg;
+            let bounds = self.shapes[shape_id].get_bounds();
+            self.mark_region_dirty(bounds);
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn remove_shape(&mut self, shape_id: usize) -> bool {
+        if shape_id < self.shapes.len() {
+            let bounds = self.shapes[shape_id].get_bounds();
+            self.shapes.remove(shape_id);
+            self.mark_region_dirty(bounds);
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn get_shape_bounds(&self, shape_id: usize) -> Option<Rect> {
+        self.shapes.get(shape_id).map(|shape| shape.get_bounds())
+    }
+
+    pub fn is_shape_visible(&self, shape_id: usize) -> Option<bool> {
+        self.shapes.get(shape_id).map(|shape| match shape {
+            Shape::Rectangle { hide, .. } | Shape::Text { hide, .. } => !hide,
+        })
+    }
+
+    pub fn clear_all_shapes(&mut self) {
+        if !self.shapes.is_empty() {
+            self.shapes.clear();
+            self.mark_region_dirty(Rect::new(0, 0, self.width, self.height));
+        }
+    }
+
+    pub fn get_shapes_at_point(&self, x: usize, y: usize) -> Vec<usize> {
+        let mut result = Vec::new();
+        for (i, shape) in self.shapes.iter().enumerate() {
+            if shape.get_bounds().contains_point(x, y) {
+                if let Shape::Rectangle { hide: false, .. } | Shape::Text { hide: false, .. } =
+                    shape
+                {
+                    result.push(i);
+                }
+            }
+        }
+        result
     }
 
     pub fn render(
@@ -107,24 +450,53 @@ impl Surface {
         offset_y: usize,
         force: bool,
     ) -> bool {
-        if self.is_dirty || force {
+        if !self.is_dirty && !force {
+            return false;
+        }
+
+        if force {
+            self.dirty_regions.clear();
+            self.dirty_regions
+                .push(Rect::new(0, 0, self.width, self.height));
+        }
+
+        // Render each dirty region
+        for region in &self.dirty_regions {
+            // Clear the dirty region with background
             if self.just_fill_bg {
-                framebuffer.fill(self.background_color.r); // Assume `r` is the brightness level
+                // For just_fill_bg mode, we need to be more careful about the region
+                for y in region.y..(region.y + region.height) {
+                    for x in region.x..(region.x + region.width) {
+                        if x < self.width && y < self.height {
+                            framebuffer.write_pixel(
+                                x + offset_x,
+                                y + offset_y,
+                                self.background_color,
+                            );
+                        }
+                    }
+                }
             } else {
                 framebuffer.draw_rect(
-                    (offset_x, offset_y),
-                    (offset_x + self.width - 1, offset_y + self.height - 1),
+                    (region.x + offset_x, region.y + offset_y),
+                    (
+                        region.x + region.width - 1 + offset_x,
+                        region.y + region.height - 1 + offset_y,
+                    ),
                     self.background_color,
-                ); // TODO: Check if "regions" are dirty instead of full framebuffer, this is extremely slow
+                );
             }
 
+            // Only render shapes that intersect with this dirty region
             for shape in &self.shapes {
-                shape.render(framebuffer, offset_x, offset_y);
+                if shape.intersects_rect(region) {
+                    shape.render_clipped(framebuffer, offset_x, offset_y, region);
+                }
             }
-            self.is_dirty = false;
-
-            return true;
         }
-        false
+
+        self.dirty_regions.clear();
+        self.is_dirty = false;
+        true
     }
 }
