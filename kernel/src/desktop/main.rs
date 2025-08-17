@@ -1,5 +1,6 @@
 use crate::{
     desktop::{
+        calculator::Calculator,
         input::{CLICK_QUEUE, CurrentMouseState, SCANCODE_QUEUE, STATE_QUEUE, init_queues},
         window_manager::{Window, WindowManager},
     },
@@ -21,7 +22,17 @@ pub fn run_desktop() -> ! {
 
     let mut window_manager = WindowManager::new();
 
-    window_manager.add_window(Window::new(100, 100, 800, 600, 1, "My Window".to_string()));
+    window_manager.add_window(Window::new(
+        100,
+        100,
+        300,
+        400,
+        1,
+        "My Window".to_string(),
+        Some(crate::desktop::window_manager::Application::Calculator(
+            Calculator::new(),
+        )),
+    ));
 
     let click_queue = CLICK_QUEUE.get().expect("Click queue not initialized");
 
@@ -154,6 +165,15 @@ pub fn run_desktop() -> ! {
         }
 
         while let Some((x, y)) = click_queue.pop() {
+            let (handled, force_redraw) = window_manager.handle_mouse_click(x, y);
+            if force_redraw {
+                desktop.is_dirty = true;
+            }
+
+            if handled {
+                continue;
+            }
+
             let x = x as usize;
             let y = y as usize;
 
