@@ -1,4 +1,7 @@
-use alloc::{string::String, vec::Vec};
+use alloc::{
+    string::{String, ToString},
+    vec::Vec,
+};
 
 use crate::{
     desktop::calculator::Calculator,
@@ -170,4 +173,18 @@ impl WindowManager {
 
         (false, false)
     }
+}
+
+pub fn launch_calculator(window_manager: &mut WindowManager) {
+    window_manager.add_window(Window::new(
+        100,
+        100,
+        205,
+        315,
+        1,
+        "Calculator".to_string(),
+        Some(crate::desktop::window_manager::Application::Calculator(
+            Calculator::new(),
+        )),
+    ));
 }

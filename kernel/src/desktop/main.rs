@@ -1,15 +1,14 @@
 use crate::{
     desktop::{
-        calculator::Calculator,
         input::{CLICK_QUEUE, CurrentMouseState, SCANCODE_QUEUE, STATE_QUEUE, init_queues},
-        window_manager::{Window, WindowManager},
+        window_manager::{WindowManager, launch_calculator},
     },
     framebuffer::{self, Color, SCREEN_SIZE},
     print, serial_println,
     surface::{Shape, Surface},
     time::get_utc_time,
 };
-use alloc::{format, string::ToString};
+use alloc::{format, string::ToString, vec::Vec};
 use pc_keyboard::{DecodedKey, HandleControl, Keyboard, ScancodeSet1, layouts};
 
 use x86_64::instructions::interrupts::without_interrupts;
@@ -19,27 +18,12 @@ pub fn run_desktop() -> ! {
     init_queues();
 
     let mut mouse_state = CurrentMouseState::new();
-
     let mut window_manager = WindowManager::new();
 
-    window_manager.add_window(Window::new(
-        100,
-        100,
-        205,
-        315,
-        1,
-        "Calculator".to_string(),
-        Some(crate::desktop::window_manager::Application::Calculator(
-            Calculator::new(),
-        )),
-    ));
-
     let click_queue = CLICK_QUEUE.get().expect("Click queue not initialized");
-
     let scancode_queue = SCANCODE_QUEUE
         .try_get()
         .expect("Scancode queue not initialized");
-
     let mouse_state_queue = STATE_QUEUE
         .try_get()
         .expect("Mouse state queue not initialized");
@@ -72,16 +56,60 @@ pub fn run_desktop() -> ! {
         hide: false,
     });
 
+    let mut start_menu_entries: Vec<(usize, usize, usize, usize, usize, usize, &str)> = Vec::new(); // (idx, label idx, x, y, width, height, label)
+    let mut start_menu_open = false;
+
     // Start menu placeholder
-    let start_menu_idx = desktop.add_shape(Shape::Rectangle {
-        x: 0,
-        y: screen_size.1 as usize - 330,
-        width: 200,
-        height: 300,
-        color: framebuffer::Color::GREEN,
-        filled: true,
-        hide: true,
-    });
+    start_menu_entries.push((
+        desktop.add_shape(Shape::Rectangle {
+            x: 0,
+            y: screen_size.1 as usize - 330,
+            width: 200,
+            height: 300,
+            color: framebuffer::Color::GREEN,
+            filled: true,
+            hide: true,
+        }),
+        desktop.add_shape(Shape::Text {
+            x: 10,
+            y: screen_size.1 as usize - 320,
+            content: "Start Menu".to_string(),
+            color: framebuffer::Color::BLACK,
+            fill_bg: false,
+            hide: true,
+        }),
+        0,
+        screen_size.1 as usize - 330,
+        200,
+        300,
+        "",
+    ));
+
+    // Calculator start button
+    start_menu_entries.push((
+        desktop.add_shape(Shape::Rectangle {
+            x: 10,
+            y: screen_size.1 as usize - 320,
+            width: 180,
+            height: 30,
+            color: framebuffer::Color::WHITE,
+            filled: true,
+            hide: true,
+        }),
+        desktop.add_shape(Shape::Text {
+            x: 20,
+            y: screen_size.1 as usize - 310,
+            content: "Calculator".to_string(),
+            color: framebuffer::Color::BLACK,
+            fill_bg: false,
+            hide: true,
+        }),
+        10,
+        screen_size.1 as usize - 320,
+        180,
+        30,
+        "Calculator",
+    ));
 
     // Time and date background
     desktop.add_shape(Shape::Rectangle {
@@ -165,7 +193,7 @@ pub fn run_desktop() -> ! {
         }
 
         while let Some((x, y)) = click_queue.pop() {
-            let (handled, force_redraw) = window_manager.handle_mouse_click(x, y);
+            let (mut handled, force_redraw) = window_manager.handle_mouse_click(x, y);
             if force_redraw {
                 desktop.is_dirty = true;
             }
@@ -177,16 +205,59 @@ pub fn run_desktop() -> ! {
             let x = x as usize;
             let y = y as usize;
 
+            if start_menu_open {
+                for (_, _, item_x, item_y, width, height, label) in &start_menu_entries {
+                    if *item_x <= x && x < *item_x + *width && *item_y <= y && y < *item_y + *height
+                    {
+                        if *label == "Calculator" {
+                            launch_calculator(&mut window_manager);
+
+                            start_menu_open = false;
+                            for (idx, label_idx, _, _, _, _, _) in &start_menu_entries {
+                                if let Some(shape) = desktop.shapes.get_mut(*idx) {
+                                    if let Shape::Rectangle { hide, .. } = shape {
+                                        *hide = true;
+                                    }
+                                }
+
+                                if let Some(label_shape) = desktop.shapes.get_mut(*label_idx) {
+                                    if let Shape::Text { hide, .. } = label_shape {
+                                        *hide = true;
+                                    }
+                                }
+                            }
+                            desktop.is_dirty = true;
+
+                            handled = true;
+                            break;
+                        }
+                    }
+                }
+            }
+
+            if handled {
+                continue;
+            }
+
             // Check if click is within the start button region
             if x >= start_button_region.0
                 && x < start_button_region.0 + start_button_region.2
                 && y >= start_button_region.1
                 && y < start_button_region.1 + start_button_region.3
             {
-                // Toggle start menu visibility
-                if let Some(shape) = desktop.shapes.get_mut(start_menu_idx) {
-                    if let Shape::Rectangle { hide, .. } = shape {
-                        *hide = !*hide;
+                start_menu_open = !start_menu_open;
+
+                // Update start menu entries visibility
+                for (idx, label_idx, _, _, _, _, _) in &start_menu_entries {
+                    if let Some(shape) = desktop.shapes.get_mut(*idx) {
+                        if let Shape::Rectangle { hide, .. } = shape {
+                            *hide = !start_menu_open;
+                        }
+                    }
+                    if let Some(label_shape) = desktop.shapes.get_mut(*label_idx) {
+                        if let Shape::Text { hide, .. } = label_shape {
+                            *hide = !start_menu_open;
+                        }
                     }
                 }
 
