@@ -25,10 +25,10 @@ pub fn run_desktop() -> ! {
     window_manager.add_window(Window::new(
         100,
         100,
-        300,
-        400,
+        205,
+        315,
         1,
-        "My Window".to_string(),
+        "Calculator".to_string(),
         Some(crate::desktop::window_manager::Application::Calculator(
             Calculator::new(),
         )),

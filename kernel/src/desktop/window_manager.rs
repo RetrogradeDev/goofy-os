@@ -49,7 +49,7 @@ impl Window {
     }
 
     pub fn render(&mut self, framebuffer: &mut FrameBufferWriter, force: bool) -> bool {
-        match &self.application {
+        match &mut self.application {
             Some(Application::Calculator(calculator)) => {
                 calculator.render(&mut self.surface);
             }
@@ -94,14 +94,14 @@ impl WindowManager {
             for window in &mut self.windows {
                 // Random outline
                 framebuffer.draw_rect_outline(
-                    (window.x, window.y),
+                    (window.x - 1, window.y - 1),
                     (window.x + window.width, window.y + window.height),
                     Color::BLACK,
                 );
 
                 // Titlebar
                 framebuffer.draw_rect(
-                    (window.x, window.y - 20),
+                    (window.x - 1, window.y - 20),
                     (window.x + window.width, window.y),
                     Color::BLACK,
                 );
