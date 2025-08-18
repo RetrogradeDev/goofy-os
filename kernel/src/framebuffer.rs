@@ -428,7 +428,7 @@ impl FrameBufferWriter {
         }
     }
 
-    fn save_cursor_background(&mut self, x: usize, y: usize) {
+    pub fn save_cursor_background(&mut self, x: usize, y: usize) {
         let start_y: usize = y.saturating_sub(CURSOR_ROW_OFFSET);
 
         let mut idx: usize = 0; // Index for the saved pixels

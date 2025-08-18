@@ -21,6 +21,7 @@ pub struct Window {
     pub id: usize,
     pub title: String,
     pub surface: Surface,
+    pub dragging_offset: Option<(i16, i16)>,
     pub application: Option<Application>,
 }
 
@@ -48,6 +49,7 @@ impl Window {
             title,
             surface,
             application,
+            dragging_offset: None,
         }
     }
 
@@ -211,6 +213,71 @@ impl WindowManager {
         }
 
         (false, None)
+    }
+
+    pub fn handle_mouse_down(&mut self, x: i16, y: i16) -> bool {
+        for window in &mut self.windows {
+            if x as usize >= window.x
+                && x as usize <= window.x + window.width - 20
+                && y as usize >= window.y - 20
+                && y as usize <= window.y
+            {
+                window.dragging_offset = Some((x, y));
+                return true;
+            }
+        }
+        false
+    }
+
+    pub fn handle_mouse_move(&mut self, x: i16, y: i16) -> Option<(usize, usize, usize, usize)> {
+        for window in &mut self.windows {
+            if let Some(offset) = window.dragging_offset {
+                let delta_x = x - offset.0;
+                let delta_y = y - offset.1;
+
+                window.dragging_offset = Some((x, y));
+
+                let prev_x = window.x;
+                let prev_y = window.y;
+
+                window.x = (window.x as i16).saturating_add(delta_x).max(1) as usize;
+                window.y = (window.y as i16).saturating_add(delta_y).max(20) as usize;
+
+                let (x, width) = if delta_x < 0 {
+                    (
+                        window.x.saturating_sub(1),
+                        window.width.saturating_add(-delta_x as usize + 2),
+                    )
+                } else {
+                    (
+                        prev_x.saturating_sub(1),
+                        window.width.saturating_add(delta_x as usize + 2),
+                    )
+                };
+
+                let (y, height) = if delta_y < 0 {
+                    (
+                        window.y.saturating_sub(20),
+                        window.height.saturating_add(-delta_y as usize + 21),
+                    )
+                } else {
+                    (
+                        prev_y.saturating_sub(20),
+                        window.height.saturating_add(delta_y as usize + 21),
+                    )
+                };
+
+                return Some((x, y, width, height));
+            }
+        }
+
+        None
+    }
+
+    pub fn handle_mouse_release(&mut self) {
+        for window in &mut self.windows {
+            window.dragging_offset = None;
+        }
     }
 }
 

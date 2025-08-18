@@ -50,6 +50,12 @@ pub fn init_queues() {
 pub struct CurrentMouseState {
     pub x: i16,
     pub y: i16,
+
+    pub prev_x: i16,
+    pub prev_y: i16,
+    pub prev_left_button_down: bool,
+    pub prev_right_button_down: bool,
+
     pub left_button_down: bool,
     pub right_button_down: bool,
 
@@ -63,6 +69,10 @@ impl CurrentMouseState {
         CurrentMouseState {
             x: (screen_size.0 / 2) as i16,
             y: (screen_size.1 / 2) as i16,
+            prev_x: (screen_size.0 / 2) as i16,
+            prev_y: (screen_size.1 / 2) as i16,
+            prev_left_button_down: false,
+            prev_right_button_down: false,
             left_button_down: false,
             right_button_down: false,
             has_moved: true, // Ensure the cursor is drawn initially
@@ -71,9 +81,10 @@ impl CurrentMouseState {
     }
 
     pub fn update(&mut self, state: MouseState) {
-        let prev_x = self.x;
-        let prev_y = self.y;
-        let prev_left_down = self.left_button_down;
+        self.prev_x = self.x;
+        self.prev_y = self.y;
+        self.prev_left_button_down = self.left_button_down;
+        self.prev_right_button_down = self.right_button_down;
 
         self.x += state.get_x();
         self.y -= state.get_y();
@@ -85,10 +96,10 @@ impl CurrentMouseState {
         self.left_button_down = state.left_button_down();
         self.right_button_down = state.right_button_down();
 
-        self.has_moved = self.x != prev_x || self.y != prev_y; // TODO: fix this
+        self.has_moved = self.x != self.prev_x || self.y != self.prev_y; // TODO: fix this
 
         // Detect click: mouse down, no moving, mouse up
-        if prev_left_down && !self.left_button_down && !self.has_moved {
+        if self.prev_left_button_down && !self.left_button_down && !self.has_moved {
             if let Some(queue) = CLICK_QUEUE.get() {
                 if queue.push((self.x, self.y)).is_err() {
                     print!(

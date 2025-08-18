@@ -13,6 +13,8 @@ use pc_keyboard::{DecodedKey, HandleControl, Keyboard, ScancodeSet1, layouts};
 
 use x86_64::instructions::interrupts::without_interrupts;
 
+const TASKBAR_HEIGHT: usize = 50;
+
 pub fn run_desktop() -> ! {
     serial_println!("Running desktop...");
     init_queues();
@@ -29,21 +31,34 @@ pub fn run_desktop() -> ! {
         .expect("Mouse state queue not initialized");
 
     let screen_size = *SCREEN_SIZE.get().unwrap();
-    let mut desktop = Surface::new(screen_size.0 as usize, screen_size.1 as usize, Color::GRAY);
+    let mut desktop = Surface::new(
+        screen_size.0 as usize,
+        screen_size.1 as usize,
+        Color::new(50, 111, 168),
+    );
     desktop.just_fill_bg = true;
 
-    let start_button_region = (0, screen_size.1 as usize - 30, 80, 30);
+    let start_button_region = (
+        0,
+        screen_size.1 as usize - TASKBAR_HEIGHT,
+        160,
+        TASKBAR_HEIGHT,
+    );
 
     // Taskbar
-    desktop.add_shape(Shape::Rectangle {
-        x: 0,
-        y: screen_size.1 as usize - 30,
-        width: screen_size.0 as usize,
-        height: 30,
-        color: framebuffer::Color::RED,
-        filled: true,
-        hide: false,
-    });
+    // Rerender performance trick:
+    const TASKBAR_CHUNK_AMOUNT: usize = 8;
+    for i in 0..TASKBAR_CHUNK_AMOUNT {
+        desktop.add_shape(Shape::Rectangle {
+            x: i * (screen_size.0 as usize / TASKBAR_CHUNK_AMOUNT),
+            y: screen_size.1 as usize - TASKBAR_HEIGHT,
+            width: screen_size.0 as usize / TASKBAR_CHUNK_AMOUNT,
+            height: TASKBAR_HEIGHT,
+            color: Color::new(175, 175, 175),
+            filled: true,
+            hide: false,
+        });
+    }
 
     // Start button
     desktop.add_shape(Shape::Rectangle {
@@ -56,6 +71,15 @@ pub fn run_desktop() -> ! {
         hide: false,
     });
 
+    desktop.add_shape(Shape::Text {
+        x: start_button_region.0 + 10,
+        y: start_button_region.1 + 10,
+        content: "Start".to_string(),
+        color: framebuffer::Color::BLACK,
+        fill_bg: false,
+        hide: false,
+    });
+
     let mut start_menu_entries: Vec<(usize, usize, usize, usize, usize, usize, &str)> = Vec::new(); // (idx, label idx, x, y, width, height, label)
     let mut start_menu_open = false;
 
@@ -63,23 +87,24 @@ pub fn run_desktop() -> ! {
     start_menu_entries.push((
         desktop.add_shape(Shape::Rectangle {
             x: 0,
-            y: screen_size.1 as usize - 330,
+            y: screen_size.1 as usize - 300 - TASKBAR_HEIGHT,
             width: 200,
             height: 300,
-            color: framebuffer::Color::GREEN,
+            color: Color::GREEN,
             filled: true,
             hide: true,
         }),
-        desktop.add_shape(Shape::Text {
-            x: 10,
-            y: screen_size.1 as usize - 320,
-            content: "Start Menu".to_string(),
-            color: framebuffer::Color::BLACK,
-            fill_bg: false,
+        desktop.add_shape(Shape::Rectangle {
+            x: 0,
+            y: 0,
+            width: 1,
+            height: 1,
+            color: Color::WHITE,
+            filled: false,
             hide: true,
         }),
         0,
-        screen_size.1 as usize - 330,
+        screen_size.1 as usize - 290 - TASKBAR_HEIGHT,
         200,
         300,
         "",
@@ -89,7 +114,7 @@ pub fn run_desktop() -> ! {
     start_menu_entries.push((
         desktop.add_shape(Shape::Rectangle {
             x: 10,
-            y: screen_size.1 as usize - 320,
+            y: screen_size.1 as usize - 340,
             width: 180,
             height: 30,
             color: framebuffer::Color::WHITE,
@@ -98,14 +123,14 @@ pub fn run_desktop() -> ! {
         }),
         desktop.add_shape(Shape::Text {
             x: 20,
-            y: screen_size.1 as usize - 310,
+            y: screen_size.1 as usize - 330,
             content: "Calculator".to_string(),
             color: framebuffer::Color::BLACK,
             fill_bg: false,
             hide: true,
         }),
         10,
-        screen_size.1 as usize - 320,
+        screen_size.1 as usize - 340,
         180,
         30,
         "Calculator",
@@ -113,10 +138,10 @@ pub fn run_desktop() -> ! {
 
     // Time and date background
     desktop.add_shape(Shape::Rectangle {
-        x: screen_size.0 as usize - 102,
-        y: screen_size.1 as usize - 28,
+        x: screen_size.0 as usize - 108,
+        y: screen_size.1 as usize - TASKBAR_HEIGHT + 8,
         width: 100,
-        height: 26,
+        height: TASKBAR_HEIGHT - 16,
         color: framebuffer::Color::BLACK,
         filled: true,
         hide: false,
@@ -125,7 +150,7 @@ pub fn run_desktop() -> ! {
     // Time
     let time_shape_idx = desktop.add_shape(Shape::Text {
         x: screen_size.0 as usize - 100,
-        y: screen_size.1 as usize - 28,
+        y: screen_size.1 as usize - TASKBAR_HEIGHT + 12,
         content: "22:42".to_string(),
         color: framebuffer::Color::WHITE,
         fill_bg: false,
@@ -135,7 +160,7 @@ pub fn run_desktop() -> ! {
     // Date
     let date_shape_idx = desktop.add_shape(Shape::Text {
         x: screen_size.0 as usize - 100,
-        y: screen_size.1 as usize - 16,
+        y: screen_size.1 as usize - TASKBAR_HEIGHT + 8 + 16,
         content: "8/15/2025".to_string(),
         color: framebuffer::Color::WHITE,
         fill_bg: false,
@@ -238,6 +263,22 @@ pub fn run_desktop() -> ! {
             }
         }
 
+        if mouse_state.left_button_down && !mouse_state.prev_left_button_down {
+            window_manager.handle_mouse_down(mouse_state.x, mouse_state.y);
+        }
+
+        if !mouse_state.left_button_down && mouse_state.prev_left_button_down {
+            window_manager.handle_mouse_release();
+        }
+
+        if mouse_state.has_moved && mouse_state.left_button_down {
+            let bounds_changed = window_manager.handle_mouse_move(mouse_state.x, mouse_state.y);
+
+            if let Some(bounds) = bounds_changed {
+                desktop.force_dirty_region(bounds.0, bounds.1, bounds.2, bounds.3);
+            }
+        }
+
         // Draw desktop
         without_interrupts(|| {
             if let Some(fb) = framebuffer::FRAMEBUFFER.get() {
@@ -273,6 +314,11 @@ pub fn run_desktop() -> ! {
                     let cursor_intersects = dirty_regions
                         .iter()
                         .any(|region| region.intersects(&current_cursor_rect));
+
+                    if cursor_intersects {
+                        fb_lock
+                            .save_cursor_background(mouse_state.x as usize, mouse_state.y as usize);
+                    }
 
                     // Also check previous cursor position if it exists
                     let prev_cursor_intersects =
