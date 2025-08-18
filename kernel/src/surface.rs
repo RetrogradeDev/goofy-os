@@ -2,7 +2,7 @@ use alloc::{string::String, vec, vec::Vec};
 
 use crate::framebuffer::{Color, FrameBufferWriter};
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, PartialEq, Clone, Copy)]
 pub struct Rect {
     pub x: usize,
     pub y: usize,
@@ -230,21 +230,60 @@ impl Surface {
     }
 
     pub fn mark_region_dirty(&mut self, region: Rect) {
+        let expanded_region = self.expand_region_for_overlapping_shapes(region);
+
         // Merge overlapping dirty regions to avoid fragmentation
         let mut merged = false;
         for existing in &mut self.dirty_regions {
-            if existing.intersects(&region) {
-                *existing = existing.union(&region);
+            if existing.intersects(&expanded_region) {
+                *existing = existing.union(&expanded_region);
                 merged = true;
                 break;
             }
         }
 
         if !merged {
-            self.dirty_regions.push(region);
+            self.dirty_regions.push(expanded_region);
         }
 
         self.is_dirty = true;
+    }
+
+    /// Expand a dirty region to include all shapes that overlap with it (recursively)
+    fn expand_region_for_overlapping_shapes(&self, initial_region: Rect) -> Rect {
+        let mut current_region = initial_region;
+        let mut changed = true;
+
+        // Keep expanding until no more overlapping shapes are found
+        while changed {
+            changed = false;
+            let previous_region = current_region;
+
+            // Find all shapes that intersect with the current region
+            for shape in &self.shapes {
+                if shape.intersects_rect(&current_region) {
+                    let shape_bounds = shape.get_bounds();
+                    let new_region = current_region.union(&shape_bounds);
+
+                    // If the region expanded, we need to check again for more overlaps
+                    if new_region.width != current_region.width
+                        || new_region.height != current_region.height
+                        || new_region.x != current_region.x
+                        || new_region.y != current_region.y
+                    {
+                        current_region = new_region;
+                        changed = true;
+                    }
+                }
+            }
+
+            // Safety check to prevent infinite loops (shouldn't happen but just in case)
+            if current_region == previous_region {
+                break;
+            }
+        }
+
+        current_region
     }
 
     pub fn force_dirty_region(&mut self, x: usize, y: usize, width: usize, height: usize) {
@@ -354,20 +393,19 @@ impl Surface {
     }
 
     pub fn update_text_content(&mut self, shape_id: usize, new_content: String) -> bool {
-        if let Some(Shape::Text { content, .. }) = self.shapes.get_mut(shape_id) {
-            // Get old bounds before changing content
-            let old_len = content.len();
+        if let Some(Shape::Text { content, x, y, .. }) = self.shapes.get_mut(shape_id) {
+            // Calculate old bounds using current position and old content length
+            let old_width = content.len() * 8; // char_width
+            let old_bounds = Rect::new(*x, *y, old_width, 16); // char_height = 16
+
             *content = new_content;
 
-            // Calculate dirty region based on old and new content size
-            let shape_bounds = self.shapes[shape_id].get_bounds();
-            let old_width = old_len * 8; // char_width
-            let dirty_bounds = Rect {
-                x: shape_bounds.x,
-                y: shape_bounds.y,
-                width: old_width.max(shape_bounds.width),
-                height: shape_bounds.height,
-            };
+            // Get new bounds AFTER changing content
+            let new_bounds = self.shapes[shape_id].get_bounds();
+
+            // Mark the union of old and new bounds as dirty
+            let dirty_bounds = old_bounds.union(&new_bounds);
+
             self.mark_region_dirty(dirty_bounds);
             true
         } else {
@@ -463,8 +501,9 @@ impl Surface {
         // Render each dirty region
         for region in &self.dirty_regions {
             // Clear the dirty region with background
-            if self.just_fill_bg {
-                // For just_fill_bg mode, we need to be more careful about the region
+            // Use just_fill_bg mode only if we're doing a full redraw OR if there are no shapes
+            if self.just_fill_bg && (force || self.shapes.is_empty()) {
+                // For just_fill_bg mode with full redraw or no shapes
                 for y in region.y..(region.y + region.height) {
                     for x in region.x..(region.x + region.width) {
                         if x < self.width && y < self.height {
@@ -477,6 +516,7 @@ impl Surface {
                     }
                 }
             } else {
+                // Use rect-based clearing for dirty regions with shapes
                 framebuffer.draw_rect(
                     (region.x + offset_x, region.y + offset_y),
                     (
@@ -498,5 +538,26 @@ impl Surface {
         self.dirty_regions.clear();
         self.is_dirty = false;
         true
+    }
+
+    /// Get the dirty regions without clearing them (for checking intersections)
+    pub fn get_dirty_regions(&self) -> &[Rect] {
+        &self.dirty_regions
+    }
+
+    /// Check if any dirty regions intersect with the given rectangle
+    pub fn intersects_dirty_regions(&self, rect: &Rect) -> bool {
+        if !self.is_dirty {
+            return false;
+        }
+
+        self.dirty_regions
+            .iter()
+            .any(|dirty_rect| dirty_rect.intersects(rect))
+    }
+
+    /// Get the surface bounds as a Rect
+    pub fn get_bounds(&self) -> Rect {
+        Rect::new(0, 0, self.width, self.height)
     }
 }

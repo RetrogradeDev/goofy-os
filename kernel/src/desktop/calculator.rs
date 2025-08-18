@@ -197,7 +197,6 @@ impl Calculator {
         }
 
         surface.update_text_content(self.display_idx, self.display_text.clone());
-        surface.is_dirty = true;
 
         self.previous_display_text = self.display_text.clone();
     }

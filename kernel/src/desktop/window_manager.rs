@@ -6,7 +6,7 @@ use alloc::{
 use crate::{
     desktop::calculator::Calculator,
     framebuffer::{Color, FrameBufferWriter},
-    surface::Surface,
+    surface::{Rect, Surface},
 };
 
 pub enum Application {
@@ -51,6 +51,29 @@ impl Window {
         }
     }
 
+    /// Get the window bounds including titlebar and border
+    pub fn get_full_bounds(&self) -> Rect {
+        Rect::new(
+            self.x.saturating_sub(1),
+            self.y.saturating_sub(20),
+            self.width + 2,
+            self.height + 21,
+        )
+    }
+
+    /// Get the window content bounds (just the surface area)
+    pub fn get_content_bounds(&self) -> Rect {
+        Rect::new(self.x, self.y, self.width, self.height)
+    }
+
+    /// Check if this window intersects with the given dirty regions
+    pub fn intersects_dirty_regions(&self, dirty_regions: &[Rect]) -> bool {
+        let window_bounds = self.get_full_bounds();
+        dirty_regions
+            .iter()
+            .any(|rect| rect.intersects(&window_bounds))
+    }
+
     pub fn render(&mut self, framebuffer: &mut FrameBufferWriter, force: bool) -> bool {
         match &mut self.application {
             Some(Application::Calculator(calculator)) => {
@@ -60,6 +83,40 @@ impl Window {
         }
 
         return self.surface.render(framebuffer, self.x, self.y, force);
+    }
+
+    pub fn render_decorations(&self, framebuffer: &mut FrameBufferWriter) {
+        // Window outline
+        framebuffer.draw_rect_outline(
+            (self.x - 1, self.y - 1),
+            (self.x + self.width, self.y + self.height),
+            Color::BLACK,
+        );
+
+        // Titlebar
+        framebuffer.draw_rect(
+            (self.x - 1, self.y - 20),
+            (self.x + self.width, self.y),
+            Color::BLACK,
+        );
+        framebuffer.draw_raw_text(&self.title, self.x + 5, self.y - 15, Color::WHITE, false);
+
+        // Close button
+        framebuffer.draw_rect(
+            (self.x + self.width - 20, self.y - 20),
+            (self.x + self.width, self.y),
+            Color::RED,
+        );
+        framebuffer.draw_line(
+            (self.x + self.width - 15, self.y - 15),
+            (self.x + self.width - 5, self.y - 5),
+            Color::WHITE,
+        );
+        framebuffer.draw_line(
+            (self.x + self.width - 15, self.y - 5),
+            (self.x + self.width - 5, self.y - 15),
+            Color::WHITE,
+        );
     }
 }
 
@@ -85,57 +142,29 @@ impl WindowManager {
         self.windows.push(window);
     }
 
-    pub fn render(&mut self, framebuffer: &mut FrameBufferWriter, force: bool) -> bool {
+    pub fn render(
+        &mut self,
+        framebuffer: &mut FrameBufferWriter,
+        desktop_dirty_regions: &[Rect],
+    ) -> bool {
         let mut did_render = false;
+
         for window in &mut self.windows {
-            if window.render(framebuffer, force) {
+            // Only render window if it intersects with dirty regions or window itself is dirty
+            let intersects_dirty = window.intersects_dirty_regions(desktop_dirty_regions);
+            let should_render = window.surface.is_dirty || intersects_dirty;
+
+            if window.render(framebuffer, should_render) {
                 did_render = true;
             }
-        }
 
-        if force {
-            for window in &mut self.windows {
-                // Random outline
-                framebuffer.draw_rect_outline(
-                    (window.x - 1, window.y - 1),
-                    (window.x + window.width, window.y + window.height),
-                    Color::BLACK,
-                );
-
-                // Titlebar
-                framebuffer.draw_rect(
-                    (window.x - 1, window.y - 20),
-                    (window.x + window.width, window.y),
-                    Color::BLACK,
-                );
-                framebuffer.draw_raw_text(
-                    &window.title,
-                    window.x + 5,
-                    window.y - 15,
-                    Color::WHITE,
-                    false,
-                );
-
-                // Close button
-                framebuffer.draw_rect(
-                    (window.x + window.width - 20, window.y - 20),
-                    (window.x + window.width, window.y),
-                    Color::RED,
-                );
-                framebuffer.draw_line(
-                    (window.x + window.width - 15, window.y - 15),
-                    (window.x + window.width - 5, window.y - 5),
-                    Color::WHITE,
-                );
-                framebuffer.draw_line(
-                    (window.x + window.width - 15, window.y - 5),
-                    (window.x + window.width - 5, window.y - 15),
-                    Color::WHITE,
-                );
+            if did_render {
+                // Always render decorations when we render the window
+                window.render_decorations(framebuffer);
             }
         }
 
-        return did_render;
+        did_render
     }
 
     /// Handles mouse click events on windows.

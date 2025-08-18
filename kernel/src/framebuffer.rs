@@ -382,6 +382,31 @@ impl FrameBufferWriter {
         self.cursor_background.previous_pos = Some((x, y));
     }
 
+    /// Get the bounds of the mouse cursor at the given position
+    pub fn get_cursor_bounds(x: usize, y: usize) -> (usize, usize, usize, usize) {
+        let start_y = y.saturating_sub(CURSOR_ROW_OFFSET);
+        let mut min_x = x;
+        let mut max_x = x;
+        let mut max_y = start_y;
+
+        for (i, (start_x, end_x)) in CURSOR_ROWS.iter().enumerate() {
+            let cursor_y = start_y + i;
+            let cursor_start_x = (x as isize + start_x).max(0) as usize;
+            let cursor_end_x = (x as isize + end_x).max(0) as usize;
+
+            min_x = min_x.min(cursor_start_x);
+            max_x = max_x.max(cursor_end_x);
+            max_y = max_y.max(cursor_y);
+        }
+
+        (min_x, start_y, max_x - min_x + 1, max_y - start_y + 1)
+    }
+
+    /// Get the previous cursor position
+    pub fn get_previous_cursor_pos(&self) -> Option<(usize, usize)> {
+        self.cursor_background.previous_pos
+    }
+
     fn draw_cursor(&mut self, x: usize, y: usize) {
         let start_y: usize = y.saturating_sub(CURSOR_ROW_OFFSET);
 

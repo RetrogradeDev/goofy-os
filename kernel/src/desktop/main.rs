@@ -3,9 +3,9 @@ use crate::{
         input::{CLICK_QUEUE, CurrentMouseState, SCANCODE_QUEUE, STATE_QUEUE, init_queues},
         window_manager::{WindowManager, launch_calculator},
     },
-    framebuffer::{self, Color, SCREEN_SIZE},
+    framebuffer::{self, Color, FrameBufferWriter, SCREEN_SIZE},
     print, serial_println,
-    surface::{Shape, Surface},
+    surface::{Rect, Shape, Surface},
     time::get_utc_time,
 };
 use alloc::{format, string::ToString, vec::Vec};
@@ -146,7 +146,7 @@ pub fn run_desktop() -> ! {
 
     let mut keyboard = Keyboard::new(ScancodeSet1::new(), layouts::Azerty, HandleControl::Ignore);
 
-    let time_update_ticks = 60 * 15; // FPS is somewhere between 60 and 50 (hard to test)
+    let time_update_ticks = 60 * 5; // FPS is somewhere between 60 and 50 (hard to test)
     let mut ticks = 0u64;
 
     loop {
@@ -178,15 +178,12 @@ pub fn run_desktop() -> ! {
             // Update date
             let date_str = format!("{}/{}/{}", raw_time.day, raw_time.month, raw_time.year);
             desktop.update_text_content(date_shape_idx, date_str);
-
-            desktop.is_dirty = true;
         }
 
         while let Some((x, y)) = click_queue.pop() {
             let (mut handled, redraw_region) = window_manager.handle_mouse_click(x, y);
             if let Some((x, y, width, height)) = redraw_region {
                 desktop.force_dirty_region(x, y, width, height);
-                desktop.is_dirty = true;
             }
 
             if handled {
@@ -208,7 +205,6 @@ pub fn run_desktop() -> ! {
                                 desktop.hide_shape(*idx);
                                 desktop.hide_shape(*label_idx);
                             }
-                            desktop.is_dirty = true;
 
                             handled = true;
                             break;
@@ -239,8 +235,6 @@ pub fn run_desktop() -> ! {
                         desktop.hide_shape(*label_idx);
                     }
                 }
-
-                desktop.is_dirty = true;
             }
         }
 
@@ -249,12 +243,61 @@ pub fn run_desktop() -> ! {
             if let Some(fb) = framebuffer::FRAMEBUFFER.get() {
                 let mut fb_lock = fb.lock();
 
-                let did_render = desktop.render(&mut fb_lock, 0, 0, false);
-                // TODO: Check did render overlapped/use the same surface
-                let did_render = window_manager.render(&mut fb_lock, did_render);
+                // Get dirty regions BEFORE rendering (since render() clears them)
+                let dirty_regions: Vec<Rect> = desktop.get_dirty_regions().to_vec();
 
-                // TODO: Remove did_render when we use regions
-                if mouse_state.has_moved || did_render {
+                // Render desktop
+                let desktop_rendered = desktop.render(&mut fb_lock, 0, 0, false);
+
+                // Only render windows if they intersect with dirty regions
+                let windows_rendered = window_manager.render(&mut fb_lock, &dirty_regions);
+
+                // Handle mouse cursor rendering with region optimization
+                let should_redraw_cursor = if mouse_state.has_moved {
+                    // Mouse moved, always redraw
+                    true
+                } else if desktop_rendered || windows_rendered {
+                    // Check if any dirty regions intersect with current or previous cursor position
+                    let current_cursor_bounds = FrameBufferWriter::get_cursor_bounds(
+                        mouse_state.x as usize,
+                        mouse_state.y as usize,
+                    );
+                    let current_cursor_rect = Rect::new(
+                        current_cursor_bounds.0,
+                        current_cursor_bounds.1,
+                        current_cursor_bounds.2,
+                        current_cursor_bounds.3,
+                    );
+
+                    // Check if dirty regions intersect with current cursor
+                    let cursor_intersects = dirty_regions
+                        .iter()
+                        .any(|region| region.intersects(&current_cursor_rect));
+
+                    // Also check previous cursor position if it exists
+                    let prev_cursor_intersects =
+                        if let Some((prev_x, prev_y)) = fb_lock.get_previous_cursor_pos() {
+                            let prev_cursor_bounds =
+                                FrameBufferWriter::get_cursor_bounds(prev_x, prev_y);
+                            let prev_cursor_rect = Rect::new(
+                                prev_cursor_bounds.0,
+                                prev_cursor_bounds.1,
+                                prev_cursor_bounds.2,
+                                prev_cursor_bounds.3,
+                            );
+                            dirty_regions
+                                .iter()
+                                .any(|region| region.intersects(&prev_cursor_rect))
+                        } else {
+                            false
+                        };
+
+                    cursor_intersects || prev_cursor_intersects
+                } else {
+                    false
+                };
+
+                if should_redraw_cursor {
                     fb_lock.draw_mouse_cursor(mouse_state.x as usize, mouse_state.y as usize);
                     mouse_state.has_moved = false;
                 }
