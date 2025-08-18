@@ -264,19 +264,36 @@ pub fn run_desktop() -> ! {
         }
 
         if mouse_state.left_button_down && !mouse_state.prev_left_button_down {
-            window_manager.handle_mouse_down(mouse_state.x, mouse_state.y);
+            without_interrupts(|| {
+                if let Some(fb) = framebuffer::FRAMEBUFFER.get() {
+                    let fb_lock = fb.lock();
+                    window_manager.handle_mouse_down(mouse_state.x, mouse_state.y, &fb_lock);
+                }
+            });
         }
 
         if !mouse_state.left_button_down && mouse_state.prev_left_button_down {
-            window_manager.handle_mouse_release();
+            without_interrupts(|| {
+                if let Some(fb) = framebuffer::FRAMEBUFFER.get() {
+                    let mut fb_lock = fb.lock();
+                    let dirty_regions = window_manager.handle_mouse_release(&mut fb_lock);
+
+                    // Mark all dirty regions from window drag completion
+                    for (x, y, width, height) in dirty_regions {
+                        desktop.force_dirty_region(x, y, width, height);
+                    }
+                }
+            });
         }
 
         if mouse_state.has_moved && mouse_state.left_button_down {
-            let bounds_changed = window_manager.handle_mouse_move(mouse_state.x, mouse_state.y);
-
-            if let Some(bounds) = bounds_changed {
-                desktop.force_dirty_region(bounds.0, bounds.1, bounds.2, bounds.3);
-            }
+            without_interrupts(|| {
+                if let Some(fb) = framebuffer::FRAMEBUFFER.get() {
+                    let mut fb_lock = fb.lock();
+                    window_manager.handle_mouse_move(mouse_state.x, mouse_state.y, &mut fb_lock);
+                    // Note: No dirty regions needed during drag since we're using direct framebuffer manipulation
+                }
+            });
         }
 
         // Draw desktop

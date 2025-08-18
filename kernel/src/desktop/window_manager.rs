@@ -9,6 +9,12 @@ use crate::{
     surface::{Rect, Surface},
 };
 
+pub struct DragCache {
+    background_buffer: Vec<u8>,
+    cached_bounds: Rect,
+    is_valid: bool,
+}
+
 pub enum Application {
     Calculator(Calculator),
 }
@@ -22,6 +28,10 @@ pub struct Window {
     pub title: String,
     pub surface: Surface,
     pub dragging_offset: Option<(i16, i16)>,
+    pub is_dragging: bool,
+    pub drag_preview_x: usize,
+    pub drag_preview_y: usize,
+    drag_cache: Option<DragCache>,
     pub application: Option<Application>,
 }
 
@@ -50,6 +60,10 @@ impl Window {
             surface,
             application,
             dragging_offset: None,
+            is_dragging: false,
+            drag_preview_x: x,
+            drag_preview_y: y,
+            drag_cache: None,
         }
     }
 
@@ -120,6 +134,161 @@ impl Window {
             Color::WHITE,
         );
     }
+
+    /// Get the drag preview outline bounds
+    fn get_drag_preview_bounds(&self) -> Rect {
+        Rect::new(
+            self.drag_preview_x.saturating_sub(2),
+            self.drag_preview_y.saturating_sub(21),
+            self.width + 4,
+            self.height + 23,
+        )
+    }
+
+    /// Cache the background under the drag preview outline
+    fn cache_background_under_outline(&mut self, framebuffer: &FrameBufferWriter) {
+        let bounds = self.get_drag_preview_bounds();
+        let bytes_per_pixel = 3; // Assuming RGB format for simplicity
+        let buffer_size = (bounds.width + bounds.height) * bytes_per_pixel * 2;
+
+        let mut background_buffer = Vec::with_capacity(buffer_size);
+
+        for x in bounds.x..bounds.x + bounds.width {
+            let color = framebuffer.read_pixel(x, bounds.y);
+            background_buffer.extend_from_slice(&[color.r, color.g, color.b]);
+        }
+        for x in bounds.x..bounds.x + bounds.width {
+            let color = framebuffer.read_pixel(x, bounds.y + bounds.height);
+            background_buffer.extend_from_slice(&[color.r, color.g, color.b]);
+        }
+
+        for y in bounds.y..bounds.y + bounds.height {
+            let color = framebuffer.read_pixel(bounds.x, y);
+            background_buffer.extend_from_slice(&[color.r, color.g, color.b]);
+        }
+        for y in bounds.y..bounds.y + bounds.height {
+            let color = framebuffer.read_pixel(bounds.x + bounds.width, y);
+            background_buffer.extend_from_slice(&[color.r, color.g, color.b]);
+        }
+
+        self.drag_cache = Some(DragCache {
+            background_buffer,
+            cached_bounds: bounds,
+            is_valid: true,
+        });
+    }
+
+    /// Restore the cached background
+    fn restore_cached_background(&mut self, framebuffer: &mut FrameBufferWriter) {
+        if let Some(cache) = &self.drag_cache {
+            if !cache.is_valid {
+                return;
+            }
+
+            let bounds = &cache.cached_bounds;
+            let bytes_per_pixel = 3;
+
+            // Restore pixels row by row
+            let mut buffer_idx = 0;
+            for x in bounds.x..bounds.x + bounds.width {
+                let r = cache.background_buffer[buffer_idx];
+                let g = cache.background_buffer[buffer_idx + 1];
+                let b = cache.background_buffer[buffer_idx + 2];
+                framebuffer.write_pixel(x, bounds.y, Color::new(r, g, b));
+                buffer_idx += bytes_per_pixel;
+            }
+            for x in bounds.x..bounds.x + bounds.width {
+                let r = cache.background_buffer[buffer_idx];
+                let g = cache.background_buffer[buffer_idx + 1];
+                let b = cache.background_buffer[buffer_idx + 2];
+                framebuffer.write_pixel(x, bounds.y + bounds.height, Color::new(r, g, b));
+                buffer_idx += bytes_per_pixel;
+            }
+
+            for y in bounds.y..bounds.y + bounds.height {
+                let r = cache.background_buffer[buffer_idx];
+                let g = cache.background_buffer[buffer_idx + 1];
+                let b = cache.background_buffer[buffer_idx + 2];
+                framebuffer.write_pixel(bounds.x, y, Color::new(r, g, b));
+                buffer_idx += bytes_per_pixel;
+            }
+            for y in bounds.y..bounds.y + bounds.height {
+                let r = cache.background_buffer[buffer_idx];
+                let g = cache.background_buffer[buffer_idx + 1];
+                let b = cache.background_buffer[buffer_idx + 2];
+                framebuffer.write_pixel(bounds.x + bounds.width, y, Color::new(r, g, b));
+                buffer_idx += bytes_per_pixel;
+            }
+        }
+    }
+
+    /// Draw the drag preview outline
+    fn draw_drag_outline(&self, framebuffer: &mut FrameBufferWriter) {
+        let bounds = self.get_drag_preview_bounds();
+
+        framebuffer.draw_rect_outline(
+            (bounds.x, bounds.y),
+            (bounds.x + bounds.width, bounds.y + bounds.height),
+            Color::BLACK,
+        );
+    }
+
+    /// Start dragging - enter drag mode
+    pub fn start_drag(&mut self, framebuffer: &FrameBufferWriter) {
+        self.is_dragging = true;
+        self.drag_preview_x = self.x;
+        self.drag_preview_y = self.y;
+        self.cache_background_under_outline(framebuffer);
+    }
+
+    /// Update drag preview position
+    pub fn update_drag_preview(
+        &mut self,
+        framebuffer: &mut FrameBufferWriter,
+        new_x: usize,
+        new_y: usize,
+    ) {
+        if !self.is_dragging {
+            return;
+        }
+
+        // Restore background at old preview position
+        self.restore_cached_background(framebuffer);
+
+        // Update preview position
+        self.drag_preview_x = new_x;
+        self.drag_preview_y = new_y;
+
+        // Cache background at new position and draw outline
+        self.cache_background_under_outline(framebuffer);
+        self.draw_drag_outline(framebuffer);
+    }
+
+    /// End dragging - commit to new position
+    pub fn end_drag(&mut self, framebuffer: &mut FrameBufferWriter) -> (Rect, Rect) {
+        if !self.is_dragging {
+            return (self.get_full_bounds(), self.get_full_bounds());
+        }
+
+        // Get old bounds for dirty region
+        let old_bounds = self.get_full_bounds();
+
+        // Restore background at preview position
+        self.restore_cached_background(framebuffer);
+
+        // Update actual position to preview position
+        self.x = self.drag_preview_x;
+        self.y = self.drag_preview_y;
+
+        // Get new bounds for dirty region
+        let new_bounds = self.get_full_bounds();
+
+        // Exit drag mode
+        self.is_dragging = false;
+        self.drag_cache = None;
+
+        (old_bounds, new_bounds)
+    }
 }
 
 pub struct WindowManager {
@@ -152,6 +321,11 @@ impl WindowManager {
         let mut did_render = false;
 
         for window in &mut self.windows {
+            // Skip rendering if window is being dragged (only show drag preview)
+            if window.is_dragging {
+                continue;
+            }
+
             // Only render window if it intersects with dirty regions or window itself is dirty
             let intersects_dirty = window.intersects_dirty_regions(desktop_dirty_regions);
             let should_render = window.surface.is_dirty || intersects_dirty;
@@ -215,7 +389,7 @@ impl WindowManager {
         (false, None)
     }
 
-    pub fn handle_mouse_down(&mut self, x: i16, y: i16) -> bool {
+    pub fn handle_mouse_down(&mut self, x: i16, y: i16, framebuffer: &FrameBufferWriter) {
         for window in &mut self.windows {
             if x as usize >= window.x
                 && x as usize <= window.x + window.width - 20
@@ -223,13 +397,14 @@ impl WindowManager {
                 && y as usize <= window.y
             {
                 window.dragging_offset = Some((x, y));
-                return true;
+                window.start_drag(framebuffer);
+
+                return;
             }
         }
-        false
     }
 
-    pub fn handle_mouse_move(&mut self, x: i16, y: i16) -> Option<(usize, usize, usize, usize)> {
+    pub fn handle_mouse_move(&mut self, x: i16, y: i16, framebuffer: &mut FrameBufferWriter) {
         for window in &mut self.windows {
             if let Some(offset) = window.dragging_offset {
                 let delta_x = x - offset.0;
@@ -237,47 +412,54 @@ impl WindowManager {
 
                 window.dragging_offset = Some((x, y));
 
-                let prev_x = window.x;
-                let prev_y = window.y;
+                // Calculate new position
+                let new_x = (window.drag_preview_x as i16)
+                    .saturating_add(delta_x)
+                    .max(1) as usize;
+                let new_y = (window.drag_preview_y as i16)
+                    .saturating_add(delta_y)
+                    .max(20) as usize;
 
-                window.x = (window.x as i16).saturating_add(delta_x).max(1) as usize;
-                window.y = (window.y as i16).saturating_add(delta_y).max(20) as usize;
+                // Update drag preview
+                window.update_drag_preview(framebuffer, new_x, new_y);
 
-                let (x, width) = if delta_x < 0 {
-                    (
-                        window.x.saturating_sub(1),
-                        window.width.saturating_add(-delta_x as usize + 2),
-                    )
-                } else {
-                    (
-                        prev_x.saturating_sub(1),
-                        window.width.saturating_add(delta_x as usize + 2),
-                    )
-                };
+                return;
+            }
+        }
+    }
 
-                let (y, height) = if delta_y < 0 {
-                    (
-                        window.y.saturating_sub(20),
-                        window.height.saturating_add(-delta_y as usize + 21),
-                    )
-                } else {
-                    (
-                        prev_y.saturating_sub(20),
-                        window.height.saturating_add(delta_y as usize + 21),
-                    )
-                };
+    pub fn handle_mouse_release(
+        &mut self,
+        framebuffer: &mut FrameBufferWriter,
+    ) -> Vec<(usize, usize, usize, usize)> {
+        let mut dirty_regions = Vec::new();
 
-                return Some((x, y, width, height));
+        for window in &mut self.windows {
+            if window.dragging_offset.is_some() {
+                window.dragging_offset = None;
+
+                // End drag and get dirty regions
+                let (old_bounds, new_bounds) = window.end_drag(framebuffer);
+
+                // Add both old and new positions as dirty regions
+                dirty_regions.push((
+                    old_bounds.x,
+                    old_bounds.y,
+                    old_bounds.width,
+                    old_bounds.height,
+                ));
+                if old_bounds != new_bounds {
+                    dirty_regions.push((
+                        new_bounds.x,
+                        new_bounds.y,
+                        new_bounds.width,
+                        new_bounds.height,
+                    ));
+                }
             }
         }
 
-        None
-    }
-
-    pub fn handle_mouse_release(&mut self) {
-        for window in &mut self.windows {
-            window.dragging_offset = None;
-        }
+        dirty_regions
     }
 }
 
