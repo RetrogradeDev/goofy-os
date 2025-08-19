@@ -111,15 +111,13 @@ mod font_constants {
 }
 
 /// Returns the raster of the given char or the raster of [`font_constants::BACKUP_CHAR`].
-fn get_char_raster(c: char) -> RasterizedChar {
-    fn get(c: char) -> Option<RasterizedChar> {
-        get_raster(
-            c,
-            font_constants::FONT_WEIGHT,
-            font_constants::CHAR_RASTER_HEIGHT,
-        )
+fn get_char_raster(c: char, font_weight: FontWeight, font_size: RasterHeight) -> RasterizedChar {
+    fn get(c: char, font_weight: FontWeight, font_size: RasterHeight) -> Option<RasterizedChar> {
+        get_raster(c, font_weight, font_size)
     }
-    get(c).unwrap_or_else(|| get(BACKUP_CHAR).expect("Should get raster of backup char."))
+    get(c, font_weight, font_size).unwrap_or_else(|| {
+        get(BACKUP_CHAR, font_weight, font_size).expect("Should get raster of backup char.")
+    })
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -251,7 +249,11 @@ impl FrameBufferWriter {
                 if new_ypos >= self.height() {
                     self.clear();
                 }
-                self.write_rendered_char(get_char_raster(c));
+                self.write_rendered_char(get_char_raster(
+                    c,
+                    font_constants::FONT_WEIGHT,
+                    font_constants::CHAR_RASTER_HEIGHT,
+                ));
             }
         }
     }
@@ -573,10 +575,19 @@ impl FrameBufferWriter {
         }
     }
 
-    pub fn draw_raw_text(&mut self, text: &str, x: usize, y: usize, color: Color, bg_color: Color) {
+    pub fn draw_raw_text(
+        &mut self,
+        text: &str,
+        x: usize,
+        y: usize,
+        color: Color,
+        bg_color: Color,
+        font_weight: FontWeight,
+        font_size: RasterHeight,
+    ) {
         let mut x_offset = x;
         for c in text.chars() {
-            let rendered_char = get_char_raster(c);
+            let rendered_char = get_char_raster(c, font_weight, font_size);
 
             self.write_rendered_char_at_pos(x_offset, y, &rendered_char, color, bg_color);
             x_offset += LETTER_SPACING + rendered_char.width(); // Move to the next character position

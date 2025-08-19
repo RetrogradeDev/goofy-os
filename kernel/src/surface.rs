@@ -1,4 +1,5 @@
 use alloc::{string::String, vec, vec::Vec};
+use noto_sans_mono_bitmap::{FontWeight, RasterHeight};
 
 use crate::framebuffer::{Color, FrameBufferWriter};
 
@@ -63,6 +64,9 @@ pub enum Shape {
         content: String,
         color: Color,
         background_color: Color,
+
+        font_size: RasterHeight,
+        font_weight: FontWeight,
 
         hide: bool,
     },
@@ -178,6 +182,8 @@ impl Shape {
                 content,
                 color,
                 background_color,
+                font_size,
+                font_weight,
                 hide,
             } => {
                 if *hide {
@@ -190,6 +196,8 @@ impl Shape {
                     *y + offset_y,
                     *color,
                     *background_color,
+                    *font_weight,
+                    *font_size,
                 );
             }
         }

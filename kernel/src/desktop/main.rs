@@ -9,6 +9,7 @@ use crate::{
     time::get_utc_time,
 };
 use alloc::{format, string::ToString, vec::Vec};
+use noto_sans_mono_bitmap::{FontWeight, RasterHeight};
 use pc_keyboard::{DecodedKey, HandleControl, Keyboard, ScancodeSet1, layouts};
 
 use x86_64::instructions::interrupts::without_interrupts;
@@ -82,11 +83,13 @@ pub fn run_desktop() -> ! {
     });
 
     desktop.add_shape(Shape::Text {
-        x: start_button_region.0 + 10,
-        y: start_button_region.1 + 10,
+        x: start_button_region.0 + 50,
+        y: start_button_region.1 + 15,
         content: "Start".to_string(),
         color: Color::BLACK,
         background_color: TASKBAR_COLOR,
+        font_size: RasterHeight::Size24,
+        font_weight: FontWeight::Light,
         hide: false,
     });
 
@@ -137,6 +140,8 @@ pub fn run_desktop() -> ! {
             content: "Calculator".to_string(),
             color: Color::BLACK,
             background_color: Color::WHITE,
+            font_size: RasterHeight::Size16,
+            font_weight: FontWeight::Regular,
             hide: true,
         }),
         10,
@@ -164,6 +169,8 @@ pub fn run_desktop() -> ! {
         content: "22:42".to_string(),
         color: Color::BLACK,
         background_color: TASKBAR_COLOR,
+        font_size: RasterHeight::Size16,
+        font_weight: FontWeight::Bold,
         hide: false,
     });
 
@@ -174,6 +181,8 @@ pub fn run_desktop() -> ! {
         content: "8/15/2025".to_string(),
         color: Color::BLACK,
         background_color: TASKBAR_COLOR,
+        font_size: RasterHeight::Size16,
+        font_weight: FontWeight::Bold,
         hide: false,
     });
 

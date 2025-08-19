@@ -1,7 +1,9 @@
 use alloc::{
+    format,
     string::{String, ToString},
     vec::Vec,
 };
+use noto_sans_mono_bitmap::{FontWeight, RasterHeight};
 
 use crate::{
     framebuffer::Color,
@@ -65,6 +67,8 @@ impl Calculator {
             content: self.display_text.clone(),
             color: Color::BLACK,
             background_color: Color::WHITE,
+            font_size: RasterHeight::Size32,
+            font_weight: FontWeight::Light,
             hide: false,
         });
 
@@ -97,6 +101,8 @@ impl Calculator {
                     content: button.to_string(),
                     color: Color::BLACK,
                     background_color: Color::WHITE,
+                    font_size: RasterHeight::Size24,
+                    font_weight: FontWeight::Light,
                     hide: false,
                 });
             }
@@ -153,8 +159,12 @@ impl Calculator {
                             Operation::Multiply => first * second,
                             Operation::Divide => first / second,
                         };
+
                         self.state = CalculatorState::Result(result);
-                        self.display_text = result.to_string();
+
+                        // Only 12 digits fit on the screen // TODO: fix this
+                        self.display_text = format!("{:.10}", result);
+
                         self.current_input.clear();
                     }
                 }

@@ -121,6 +121,8 @@ impl Window {
             self.y - 15,
             Color::WHITE,
             Color::BLACK,
+            noto_sans_mono_bitmap::FontWeight::Regular,
+            noto_sans_mono_bitmap::RasterHeight::Size16,
         );
 
         // Close button

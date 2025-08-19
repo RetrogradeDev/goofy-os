@@ -26,8 +26,8 @@ ps2-mouse = "0.1.4"
 version = "0.3"
 default-features = false
 features = [
-    "regular",
-    "size_16",
+    "font_weights_all",
+    "raster_heights_all",
     "unicode-basic-latin",
     # required for the fallback char '�'
     "unicode-specials",
