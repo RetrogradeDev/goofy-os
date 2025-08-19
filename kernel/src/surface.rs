@@ -62,7 +62,7 @@ pub enum Shape {
         y: usize,
         content: String,
         color: Color,
-        fill_bg: bool,
+        background_color: Color,
 
         hide: bool,
     },
@@ -177,14 +177,20 @@ impl Shape {
                 y,
                 content,
                 color,
-                fill_bg,
+                background_color,
                 hide,
             } => {
                 if *hide {
                     return;
                 }
 
-                framebuffer.draw_raw_text(content, *x + offset_x, *y + offset_y, *color, *fill_bg);
+                framebuffer.draw_raw_text(
+                    content,
+                    *x + offset_x,
+                    *y + offset_y,
+                    *color,
+                    *background_color,
+                );
             }
         }
     }
@@ -416,21 +422,6 @@ impl Surface {
     pub fn update_text_color(&mut self, shape_id: usize, new_color: Color) -> bool {
         if let Some(Shape::Text { color, .. }) = self.shapes.get_mut(shape_id) {
             *color = new_color;
-            let bounds = self.shapes[shape_id].get_bounds();
-            self.mark_region_dirty(bounds);
-            true
-        } else {
-            false
-        }
-    }
-
-    pub fn update_text_fill_bg(&mut self, shape_id: usize, fill_bg: bool) -> bool {
-        if let Some(Shape::Text {
-            fill_bg: shape_fill_bg,
-            ..
-        }) = self.shapes.get_mut(shape_id)
-        {
-            *shape_fill_bg = fill_bg;
             let bounds = self.shapes[shape_id].get_bounds();
             self.mark_region_dirty(bounds);
             true

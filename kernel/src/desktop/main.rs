@@ -14,6 +14,7 @@ use pc_keyboard::{DecodedKey, HandleControl, Keyboard, ScancodeSet1, layouts};
 use x86_64::instructions::interrupts::without_interrupts;
 
 const TASKBAR_HEIGHT: usize = 50;
+const TASKBAR_COLOR: Color = Color::new(175, 175, 175);
 
 pub fn run_desktop() -> ! {
     serial_println!("Running desktop...");
@@ -54,7 +55,16 @@ pub fn run_desktop() -> ! {
             y: screen_size.1 as usize - TASKBAR_HEIGHT,
             width: screen_size.0 as usize / TASKBAR_CHUNK_AMOUNT,
             height: TASKBAR_HEIGHT,
-            color: Color::new(175, 175, 175),
+            color: TASKBAR_COLOR,
+            filled: true,
+            hide: false,
+        });
+        desktop.add_shape(Shape::Rectangle {
+            x: i * (screen_size.0 as usize / TASKBAR_CHUNK_AMOUNT),
+            y: screen_size.1 as usize - TASKBAR_HEIGHT - 1,
+            width: screen_size.0 as usize / TASKBAR_CHUNK_AMOUNT,
+            height: 1,
+            color: Color::BLACK,
             filled: true,
             hide: false,
         });
@@ -62,11 +72,11 @@ pub fn run_desktop() -> ! {
 
     // Start button
     desktop.add_shape(Shape::Rectangle {
-        x: start_button_region.0,
+        x: start_button_region.2,
         y: start_button_region.1,
-        width: start_button_region.2,
+        width: 1,
         height: start_button_region.3,
-        color: framebuffer::Color::new(255, 0, 255),
+        color: Color::BLACK,
         filled: true,
         hide: false,
     });
@@ -75,8 +85,8 @@ pub fn run_desktop() -> ! {
         x: start_button_region.0 + 10,
         y: start_button_region.1 + 10,
         content: "Start".to_string(),
-        color: framebuffer::Color::BLACK,
-        fill_bg: false,
+        color: Color::BLACK,
+        background_color: TASKBAR_COLOR,
         hide: false,
     });
 
@@ -87,20 +97,20 @@ pub fn run_desktop() -> ! {
     start_menu_entries.push((
         desktop.add_shape(Shape::Rectangle {
             x: 0,
-            y: screen_size.1 as usize - 300 - TASKBAR_HEIGHT,
-            width: 200,
-            height: 300,
-            color: Color::GREEN,
-            filled: true,
+            y: screen_size.1 as usize - 300 - TASKBAR_HEIGHT - 2,
+            width: 201,
+            height: 302,
+            color: Color::BLACK,
+            filled: false,
             hide: true,
         }),
         desktop.add_shape(Shape::Rectangle {
             x: 0,
-            y: 0,
-            width: 1,
-            height: 1,
-            color: Color::WHITE,
-            filled: false,
+            y: screen_size.1 as usize - 300 - TASKBAR_HEIGHT - 1,
+            width: 200,
+            height: 300,
+            color: TASKBAR_COLOR,
+            filled: true,
             hide: true,
         }),
         0,
@@ -117,7 +127,7 @@ pub fn run_desktop() -> ! {
             y: screen_size.1 as usize - 340,
             width: 180,
             height: 30,
-            color: framebuffer::Color::WHITE,
+            color: Color::WHITE,
             filled: true,
             hide: true,
         }),
@@ -125,8 +135,8 @@ pub fn run_desktop() -> ! {
             x: 20,
             y: screen_size.1 as usize - 330,
             content: "Calculator".to_string(),
-            color: framebuffer::Color::BLACK,
-            fill_bg: false,
+            color: Color::BLACK,
+            background_color: Color::WHITE,
             hide: true,
         }),
         10,
@@ -138,32 +148,32 @@ pub fn run_desktop() -> ! {
 
     // Time and date background
     desktop.add_shape(Shape::Rectangle {
-        x: screen_size.0 as usize - 108,
-        y: screen_size.1 as usize - TASKBAR_HEIGHT + 8,
-        width: 100,
-        height: TASKBAR_HEIGHT - 16,
-        color: framebuffer::Color::BLACK,
+        x: screen_size.0 as usize - 95,
+        y: screen_size.1 as usize - TASKBAR_HEIGHT + 16,
+        width: 1,
+        height: TASKBAR_HEIGHT - 32,
+        color: Color::BLACK,
         filled: true,
         hide: false,
     });
 
     // Time
     let time_shape_idx = desktop.add_shape(Shape::Text {
-        x: screen_size.0 as usize - 100,
+        x: screen_size.0 as usize - 80,
         y: screen_size.1 as usize - TASKBAR_HEIGHT + 12,
         content: "22:42".to_string(),
-        color: framebuffer::Color::WHITE,
-        fill_bg: false,
+        color: Color::BLACK,
+        background_color: TASKBAR_COLOR,
         hide: false,
     });
 
     // Date
     let date_shape_idx = desktop.add_shape(Shape::Text {
-        x: screen_size.0 as usize - 100,
+        x: screen_size.0 as usize - 80,
         y: screen_size.1 as usize - TASKBAR_HEIGHT + 8 + 16,
         content: "8/15/2025".to_string(),
-        color: framebuffer::Color::WHITE,
-        fill_bg: false,
+        color: Color::BLACK,
+        background_color: TASKBAR_COLOR,
         hide: false,
     });
 

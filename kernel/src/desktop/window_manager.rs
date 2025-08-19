@@ -115,7 +115,13 @@ impl Window {
             (self.x + self.width, self.y),
             Color::BLACK,
         );
-        framebuffer.draw_raw_text(&self.title, self.x + 5, self.y - 15, Color::WHITE, false);
+        framebuffer.draw_raw_text(
+            &self.title,
+            self.x + 5,
+            self.y - 15,
+            Color::WHITE,
+            Color::BLACK,
+        );
 
         // Close button
         framebuffer.draw_rect(

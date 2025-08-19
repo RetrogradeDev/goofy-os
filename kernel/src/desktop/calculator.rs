@@ -64,7 +64,7 @@ impl Calculator {
             y: 30,
             content: self.display_text.clone(),
             color: Color::BLACK,
-            fill_bg: false,
+            background_color: Color::WHITE,
             hide: false,
         });
 
@@ -96,7 +96,7 @@ impl Calculator {
                     y: y + 15,
                     content: button.to_string(),
                     color: Color::BLACK,
-                    fill_bg: false,
+                    background_color: Color::WHITE,
                     hide: false,
                 });
             }

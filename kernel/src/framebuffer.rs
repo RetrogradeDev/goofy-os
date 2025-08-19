@@ -259,7 +259,13 @@ impl FrameBufferWriter {
     /// Prints a rendered char into the framebuffer.
     /// Updates `self.x_pos`.
     fn write_rendered_char(&mut self, rendered_char: RasterizedChar) {
-        self.write_rendered_char_at_pos(self.x_pos, self.y_pos, &rendered_char, TEXT_COLOR, true);
+        self.write_rendered_char_at_pos(
+            self.x_pos,
+            self.y_pos,
+            &rendered_char,
+            TEXT_COLOR,
+            Color::BLACK,
+        );
         self.x_pos += rendered_char.width() + LETTER_SPACING;
     }
 
@@ -269,24 +275,24 @@ impl FrameBufferWriter {
         pos_y: usize,
         rendered_char: &RasterizedChar,
         color: Color,
-        fill_bg: bool,
+        bg_color: Color,
     ) {
         for (y, row) in rendered_char.raster().iter().enumerate() {
             for (x, byte) in row.iter().enumerate() {
-                if byte == &0 && !fill_bg {
+                if byte == &0 {
                     continue;
                 }
 
                 let byte = *byte as f32 / 255.0;
-                self.write_pixel(
-                    pos_x + x,
-                    pos_y + y,
-                    Color::new(
-                        (color.r as f32 * byte) as u8,
-                        (color.g as f32 * byte) as u8,
-                        (color.b as f32 * byte) as u8,
-                    ),
+                let byte_reverse = 1.0 - byte;
+
+                let color = Color::new(
+                    ((color.r as f32 * byte) + (bg_color.r as f32 * byte_reverse)) as u8,
+                    ((color.g as f32 * byte) + (bg_color.g as f32 * byte_reverse)) as u8,
+                    ((color.b as f32 * byte) + (bg_color.b as f32 * byte_reverse)) as u8,
                 );
+
+                self.write_pixel(pos_x + x, pos_y + y, color);
             }
         }
     }
@@ -567,12 +573,12 @@ impl FrameBufferWriter {
         }
     }
 
-    pub fn draw_raw_text(&mut self, text: &str, x: usize, y: usize, color: Color, fill_bg: bool) {
+    pub fn draw_raw_text(&mut self, text: &str, x: usize, y: usize, color: Color, bg_color: Color) {
         let mut x_offset = x;
         for c in text.chars() {
             let rendered_char = get_char_raster(c);
 
-            self.write_rendered_char_at_pos(x_offset, y, &rendered_char, color, fill_bg);
+            self.write_rendered_char_at_pos(x_offset, y, &rendered_char, color, bg_color);
             x_offset += LETTER_SPACING + rendered_char.width(); // Move to the next character position
         }
     }

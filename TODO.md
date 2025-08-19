@@ -1,1 +1,6 @@
  - [ ] Fix window drag outline restoring cursor colors
+ - [ ] Better start menu button styles
+ - [ ] List windows on the taskbar
+ - [ ] Make windows focusable
+ - [ ] More font sizes
+ - [x] Fix text rendering non 100% opacity bg colors
