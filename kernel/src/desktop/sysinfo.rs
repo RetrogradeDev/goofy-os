@@ -36,24 +36,11 @@ impl SysInfo {
             content: "SYSTEM INFORMATION".to_string(),
             color: Color::WHITE,
             background_color: Color::DARKGRAY,
-            font_size: RasterHeight::Size20,
-            font_weight: FontWeight::Regular,
+            font_size: RasterHeight::Size24,
+            font_weight: FontWeight::Bold,
             hide: false,
         }));
-        y_offset += line_height + 5;
-
-        // Separator
-        self.text_lines.push(surface.add_shape(Shape::Text {
-            x: x_start,
-            y: y_offset,
-            content: "--------------".to_string(),
-            color: Color::WHITE,
-            background_color: Color::DARKGRAY,
-            font_size: RasterHeight::Size16,
-            font_weight: FontWeight::Light,
-            hide: false,
-        }));
-        y_offset += line_height;
+        y_offset += line_height + 10;
 
         // OS Information
         self.text_lines.push(surface.add_shape(Shape::Text {
@@ -93,39 +80,37 @@ impl SysInfo {
             font_weight: FontWeight::Regular,
             hide: false,
         }));
-        y_offset += line_height + 5;
+        y_offset += line_height;
 
         self.text_lines.push(surface.add_shape(Shape::Text {
             x: x_start,
             y: y_offset,
-            content: format!("Processor vendor: {}", self.system_info.processor_vendor),
+            content: format!("Vendor: {}", self.system_info.processor_vendor),
             color: Color::WHITE,
             background_color: Color::DARKGRAY,
             font_size: RasterHeight::Size16,
             font_weight: FontWeight::Regular,
             hide: false,
         }));
-        y_offset += line_height + 5;
+        y_offset += line_height;
 
-        self.text_lines.push(
-            surface.add_shape(Shape::Text {
-                x: x_start,
-                y: y_offset,
-                content: format!(
+        self.text_lines.push(surface.add_shape(Shape::Text {
+            x: x_start,
+            y: y_offset,
+            content: format!(
                     "Base Frequency: {}",
                     self.system_info
                         .base_frequency
                         .map(|f| format!("{} MHz", f))
                         .unwrap_or("Unknown".to_string())
                 ),
-                color: Color::WHITE,
-                background_color: Color::DARKGRAY,
-                font_size: RasterHeight::Size16,
-                font_weight: FontWeight::Regular,
-                hide: false,
-            }),
-        );
-        y_offset += line_height + 5;
+            color: Color::WHITE,
+            background_color: Color::DARKGRAY,
+            font_size: RasterHeight::Size16,
+            font_weight: FontWeight::Regular,
+            hide: false,
+        }));
+        y_offset += line_height;
 
         self.text_lines.push(surface.add_shape(Shape::Text {
             x: x_start,
@@ -153,7 +138,7 @@ impl SysInfo {
             color: Color::WHITE,
             background_color: Color::DARKGRAY,
             font_size: RasterHeight::Size16,
-            font_weight: FontWeight::Regular,
+            font_weight: FontWeight::Bold,
             hide: false,
         }));
         y_offset += line_height;
@@ -190,7 +175,7 @@ impl SysInfo {
             font_weight: FontWeight::Regular,
             hide: false,
         }));
-        y_offset += line_height;
+        y_offset += line_height + 5;
 
         // CPU Features
         self.text_lines.push(surface.add_shape(Shape::Text {
@@ -200,7 +185,7 @@ impl SysInfo {
             color: Color::WHITE,
             background_color: Color::DARKGRAY,
             font_size: RasterHeight::Size16,
-            font_weight: FontWeight::Regular,
+            font_weight: FontWeight::Bold,
             hide: false,
         }));
         y_offset += line_height;
@@ -304,13 +289,13 @@ impl SysInfo {
         if (current_stack_usage as i32 - self.previous_stack_usage as i32).abs() > 100 {
             self.previous_stack_usage = current_stack_usage;
 
-            if self.text_lines.len() > 10 {
+            if self.text_lines.len() > 9 {
                 let stack_text = format!(
                     "Stack: {} / {}",
                     format_memory_size(current_stack_usage),
                     format_memory_size(self.system_info.stack_size)
                 );
-                surface.update_text_content(self.text_lines[10], stack_text, None);
+                surface.update_text_content(self.text_lines[9], stack_text, None);
             }
         }
     }

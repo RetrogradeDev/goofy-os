@@ -1,5 +1,5 @@
 use alloc::alloc::{GlobalAlloc, Layout};
-use core::ptr::null_mut;
+use core::sync::atomic::{AtomicUsize, Ordering};
 
 use linked_list_allocator::LockedHeap;
 
@@ -16,19 +16,7 @@ pub const HEAP_START: usize = 0x_4444_4444_0000;
 pub const HEAP_SIZE: usize = 100 * 1024; // 100 KiB
 
 #[global_allocator]
-static ALLOCATOR: LockedHeap = LockedHeap::empty();
-
-pub struct Dummy;
-
-unsafe impl GlobalAlloc for Dummy {
-    unsafe fn alloc(&self, _layout: Layout) -> *mut u8 {
-        null_mut()
-    }
-
-    unsafe fn dealloc(&self, _ptr: *mut u8, _layout: Layout) {
-        panic!("dealloc should be never called")
-    }
-}
+pub static mut ALLOCATOR: CountingAllocator = CountingAllocator::empty();
 
 pub fn init_heap(
     mapper: &mut impl Mapper<Size4KiB>,
@@ -65,7 +53,7 @@ pub fn init_heap(
     serial_println!("Heap pages mapped successfully.");
 
     unsafe {
-        ALLOCATOR.lock().init(HEAP_START as *mut u8, HEAP_SIZE);
+        init_allocator(&raw mut ALLOCATOR, HEAP_START, HEAP_SIZE);
     }
 
     serial_println!(
@@ -75,4 +63,44 @@ pub fn init_heap(
     );
 
     Ok(())
+}
+
+unsafe fn init_allocator(allocator: *mut CountingAllocator, start: usize, size: usize) {
+    unsafe {
+        (*allocator).inner.lock().init(start as *mut u8, size);
+        (*allocator).allocated.store(0, Ordering::SeqCst);
+    };
+}
+
+pub struct CountingAllocator {
+    inner: LockedHeap,
+    allocated: AtomicUsize,
+}
+
+unsafe impl GlobalAlloc for CountingAllocator {
+    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+        let ptr = unsafe { self.inner.alloc(layout) };
+        if !ptr.is_null() {
+            self.allocated.fetch_add(layout.size(), Ordering::SeqCst);
+        }
+        ptr
+    }
+
+    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+        unsafe { self.inner.dealloc(ptr, layout) };
+        self.allocated.fetch_sub(layout.size(), Ordering::SeqCst);
+    }
+}
+
+impl CountingAllocator {
+    pub const fn empty() -> Self {
+        CountingAllocator {
+            inner: LockedHeap::empty(),
+            allocated: AtomicUsize::new(0),
+        }
+    }
+
+    pub fn allocated(&self) -> usize {
+        self.allocated.load(Ordering::SeqCst)
+    }
 }

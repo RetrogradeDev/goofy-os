@@ -4,7 +4,7 @@ use alloc::{
     vec::Vec,
 };
 
-use crate::allocator::{HEAP_SIZE, HEAP_START};
+use crate::allocator::{ALLOCATOR, HEAP_SIZE, HEAP_START};
 
 pub static mut STACK_BASE: usize = 0;
 
@@ -78,9 +78,10 @@ fn get_heap_info() -> HeapInfo {
 }
 
 fn estimate_heap_usage() -> usize {
-    // Very rough estimation - in a real system you'd track this properly
-    // We'll assume some usage based on our applications
-    HEAP_SIZE / 4 // Assume 25% usage as a rough estimate
+    unsafe {
+        let allocator = &raw mut ALLOCATOR;
+        (*allocator).allocated()
+    }
 }
 
 fn get_cpu_info() -> CpuInfo {
