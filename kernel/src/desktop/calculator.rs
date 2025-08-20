@@ -206,7 +206,7 @@ impl Calculator {
             return; // No change in display text, nothing to update
         }
 
-        surface.update_text_content(self.display_idx, self.display_text.clone());
+        surface.update_text_content(self.display_idx, self.display_text.clone(), None);
 
         self.previous_display_text = self.display_text.clone();
     }

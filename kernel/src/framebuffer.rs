@@ -586,10 +586,26 @@ impl FrameBufferWriter {
         font_size: RasterHeight,
     ) {
         let mut x_offset = x;
+        let mut y_offset = y;
         for c in text.chars() {
+            match c {
+                '\n' => {
+                    x_offset = x; // Reset x offset for new line
+                    y_offset += font_size.val() + LINE_SPACING;
+
+                    continue;
+                }
+                '\r' => {
+                    x_offset = x; // Reset x offset for carriage return
+
+                    continue;
+                }
+                _ => {}
+            }
+
             let rendered_char = get_char_raster(c, font_weight, font_size);
 
-            self.write_rendered_char_at_pos(x_offset, y, &rendered_char, color, bg_color);
+            self.write_rendered_char_at_pos(x_offset, y_offset, &rendered_char, color, bg_color);
             x_offset += LETTER_SPACING + rendered_char.width(); // Move to the next character position
         }
     }

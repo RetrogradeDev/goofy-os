@@ -2,9 +2,10 @@ use alloc::{
     string::{String, ToString},
     vec::Vec,
 };
+use pc_keyboard::KeyCode;
 
 use crate::{
-    desktop::calculator::Calculator,
+    desktop::{calculator::Calculator, notepad::Notepad},
     framebuffer::{Color, FrameBufferWriter},
     surface::{Rect, Surface},
 };
@@ -17,6 +18,7 @@ pub struct DragCache {
 
 pub enum Application {
     Calculator(Calculator),
+    Notepad(Notepad),
 }
 
 pub struct Window {
@@ -47,6 +49,7 @@ impl Window {
     ) -> Self {
         let background_color = application.as_ref().map_or(Color::BLACK, |app| match app {
             Application::Calculator(_) => Color::GRAY,
+            Application::Notepad(_) => Color::WHITE,
         });
         let surface = Surface::new(width, height, background_color);
 
@@ -95,7 +98,10 @@ impl Window {
             Some(Application::Calculator(calculator)) => {
                 calculator.render(&mut self.surface);
             }
-            _ => (),
+            Some(Application::Notepad(notepad)) => {
+                notepad.render(&mut self.surface);
+            }
+            None => {}
         }
 
         return self.surface.render(framebuffer, self.x, self.y, force);
@@ -315,7 +321,10 @@ impl WindowManager {
             Some(Application::Calculator(calculator)) => {
                 calculator.init(&mut window.surface);
             }
-            _ => (),
+            Some(Application::Notepad(notepad)) => {
+                notepad.init(&mut window.surface);
+            }
+            None => {}
         }
 
         self.windows.push(window);
@@ -469,6 +478,26 @@ impl WindowManager {
 
         dirty_regions
     }
+
+    pub fn handle_char_input(&mut self, ch: char) {
+        // Send character input to the focused window (for now, just the first notepad window)
+        for window in &mut self.windows {
+            if let Some(Application::Notepad(notepad)) = &mut window.application {
+                notepad.handle_char_input(ch);
+                break; // Only send to first notepad for now
+            }
+        }
+    }
+
+    pub fn handle_key_input(&mut self, key: KeyCode) {
+        // Handle key input for focused window (for now, just the first notepad window)
+        for window in &mut self.windows {
+            if let Some(Application::Notepad(notepad)) = &mut window.application {
+                notepad.handle_key_input(key);
+                break; // Only send to first notepad for now
+            }
+        }
+    }
 }
 
 pub fn launch_calculator(window_manager: &mut WindowManager) {
@@ -481,6 +510,20 @@ pub fn launch_calculator(window_manager: &mut WindowManager) {
         "Calculator".to_string(),
         Some(crate::desktop::window_manager::Application::Calculator(
             Calculator::new(),
+        )),
+    ));
+}
+
+pub fn launch_notepad(window_manager: &mut WindowManager) {
+    window_manager.add_window(Window::new(
+        150,
+        150,
+        600,
+        400,
+        2,
+        "Notepad".to_string(),
+        Some(crate::desktop::window_manager::Application::Notepad(
+            Notepad::new(),
         )),
     ));
 }

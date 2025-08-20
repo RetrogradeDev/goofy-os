@@ -1,10 +1,10 @@
 use crate::{
     desktop::{
         input::{CLICK_QUEUE, CurrentMouseState, SCANCODE_QUEUE, STATE_QUEUE, init_queues},
-        window_manager::{WindowManager, launch_calculator},
+        window_manager::{WindowManager, launch_calculator, launch_notepad},
     },
     framebuffer::{self, Color, FrameBufferWriter, SCREEN_SIZE},
-    print, serial_println,
+    serial_println,
     surface::{Rect, Shape, Surface},
     time::get_utc_time,
 };
@@ -151,6 +151,34 @@ pub fn run_desktop() -> ! {
         "Calculator",
     ));
 
+    // Notepad start button
+    start_menu_entries.push((
+        desktop.add_shape(Shape::Rectangle {
+            x: 10,
+            y: screen_size.1 as usize - 355,
+            width: 180,
+            height: 1,
+            color: Color::BLACK,
+            filled: true,
+            hide: true,
+        }),
+        desktop.add_shape(Shape::Text {
+            x: 20,
+            y: screen_size.1 as usize - 385,
+            content: "Notepad".to_string(),
+            color: Color::BLACK,
+            background_color: TASKBAR_COLOR,
+            font_size: RasterHeight::Size20,
+            font_weight: FontWeight::Regular,
+            hide: true,
+        }),
+        0,
+        screen_size.1 as usize - 400,
+        200,
+        50,
+        "Notepad",
+    ));
+
     // Time and date background
     desktop.add_shape(Shape::Rectangle {
         x: screen_size.0 as usize - 95,
@@ -200,8 +228,12 @@ pub fn run_desktop() -> ! {
                 if let Ok(Some(key_event)) = keyboard.add_byte(scancode) {
                     if let Some(key) = keyboard.process_keyevent(key_event) {
                         match key {
-                            DecodedKey::Unicode(character) => print!("{}", character),
-                            DecodedKey::RawKey(key) => print!("{:?}", key),
+                            DecodedKey::Unicode(character) => {
+                                window_manager.handle_char_input(character);
+                            }
+                            DecodedKey::RawKey(key) => {
+                                window_manager.handle_key_input(key);
+                            }
                         }
                     }
                 }
@@ -217,11 +249,11 @@ pub fn run_desktop() -> ! {
 
             // Update time
             let time_str = format!("{:02}:{:02}", raw_time.hours, raw_time.minutes);
-            desktop.update_text_content(time_shape_idx, time_str);
+            desktop.update_text_content(time_shape_idx, time_str, None);
 
             // Update date
             let date_str = format!("{}/{}/{}", raw_time.day, raw_time.month, raw_time.year);
-            desktop.update_text_content(date_shape_idx, date_str);
+            desktop.update_text_content(date_shape_idx, date_str, None);
         }
 
         while let Some((x, y)) = click_queue.pop() {
@@ -243,6 +275,18 @@ pub fn run_desktop() -> ! {
                     {
                         if *label == "Calculator" {
                             launch_calculator(&mut window_manager);
+
+                            start_menu_open = false;
+                            for (idx, label_idx, _, _, _, _, _) in &start_menu_entries {
+                                desktop.hide_shape(*idx);
+                                desktop.hide_shape(*label_idx);
+                            }
+
+                            handled = true;
+                            break;
+                        }
+                        if *label == "Notepad" {
+                            launch_notepad(&mut window_manager);
 
                             start_menu_open = false;
                             for (idx, label_idx, _, _, _, _, _) in &start_menu_entries {

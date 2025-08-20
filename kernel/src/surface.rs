@@ -88,14 +88,27 @@ impl Shape {
                 height: *height,
             },
             Shape::Text { x, y, content, .. } => {
-                // Approximate text bounds
-                let char_width = 8; // Approximate character width
-                let char_height = 16; // Approximate character height
+                let mut width = 0;
+                let mut max_width = 0;
+                let mut height = 16;
+
+                for c in content.chars() {
+                    if c == '\n' {
+                        height += 16;
+                        max_width = max_width.max(width);
+                        width = 0;
+                    } else {
+                        width += 7;
+                    }
+                }
+
+                max_width = max_width.max(width);
+
                 Rect {
                     x: *x,
                     y: *y,
-                    width: content.len() * char_width,
-                    height: char_height,
+                    width: max_width,
+                    height,
                 }
             }
         }
@@ -406,16 +419,28 @@ impl Surface {
         }
     }
 
-    pub fn update_text_content(&mut self, shape_id: usize, new_content: String) -> bool {
-        if let Some(Shape::Text { content, x, y, .. }) = self.shapes.get_mut(shape_id) {
+    pub fn update_text_content(
+        &mut self,
+        shape_id: usize,
+        new_content: String,
+        custom_bounds: Option<Rect>,
+    ) -> bool {
+        if let Some(shape) = self.shapes.get_mut(shape_id) {
             // Calculate old bounds using current position and old content length
-            let old_width = content.len() * 8; // char_width
-            let old_bounds = Rect::new(*x, *y, old_width, 16); // char_height = 16
+            let old_bounds = shape.get_bounds();
 
-            *content = new_content;
+            if let Shape::Text { content, .. } = shape {
+                *content = new_content;
+            }
+
+            if let Some(bounds) = custom_bounds {
+                self.mark_region_dirty(bounds);
+
+                return true;
+            }
 
             // Get new bounds AFTER changing content
-            let new_bounds = self.shapes[shape_id].get_bounds();
+            let new_bounds = shape.get_bounds();
 
             // Mark the union of old and new bounds as dirty
             let dirty_bounds = old_bounds.union(&new_bounds);
