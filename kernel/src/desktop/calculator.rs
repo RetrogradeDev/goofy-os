@@ -96,7 +96,7 @@ impl Calculator {
                     hide: false,
                 });
                 surface.add_shape(Shape::Text {
-                    x: x + 10,
+                    x: x + 13,
                     y: y + 15,
                     content: button.to_string(),
                     color: Color::BLACK,

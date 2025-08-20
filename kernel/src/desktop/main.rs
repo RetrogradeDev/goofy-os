@@ -127,27 +127,27 @@ pub fn run_desktop() -> ! {
     start_menu_entries.push((
         desktop.add_shape(Shape::Rectangle {
             x: 10,
-            y: screen_size.1 as usize - 340,
+            y: screen_size.1 as usize - 305,
             width: 180,
-            height: 30,
-            color: Color::WHITE,
+            height: 1,
+            color: Color::BLACK,
             filled: true,
             hide: true,
         }),
         desktop.add_shape(Shape::Text {
             x: 20,
-            y: screen_size.1 as usize - 330,
+            y: screen_size.1 as usize - 335,
             content: "Calculator".to_string(),
             color: Color::BLACK,
-            background_color: Color::WHITE,
-            font_size: RasterHeight::Size16,
+            background_color: TASKBAR_COLOR,
+            font_size: RasterHeight::Size20,
             font_weight: FontWeight::Regular,
             hide: true,
         }),
-        10,
-        screen_size.1 as usize - 340,
-        180,
-        30,
+        0,
+        screen_size.1 as usize - 350,
+        200,
+        50,
         "Calculator",
     ));
 
@@ -170,7 +170,7 @@ pub fn run_desktop() -> ! {
         color: Color::BLACK,
         background_color: TASKBAR_COLOR,
         font_size: RasterHeight::Size16,
-        font_weight: FontWeight::Bold,
+        font_weight: FontWeight::Regular,
         hide: false,
     });
 
@@ -182,7 +182,7 @@ pub fn run_desktop() -> ! {
         color: Color::BLACK,
         background_color: TASKBAR_COLOR,
         font_size: RasterHeight::Size16,
-        font_weight: FontWeight::Bold,
+        font_weight: FontWeight::Regular,
         hide: false,
     });
 
