@@ -147,7 +147,7 @@ pub fn run_desktop() -> ! {
         0,
         screen_size.1 as usize - 350,
         200,
-        50,
+        45,
         "Calculator",
     ));
 
@@ -155,7 +155,7 @@ pub fn run_desktop() -> ! {
     start_menu_entries.push((
         desktop.add_shape(Shape::Rectangle {
             x: 10,
-            y: screen_size.1 as usize - 355,
+            y: screen_size.1 as usize - 260,
             width: 180,
             height: 1,
             color: Color::BLACK,
@@ -164,7 +164,7 @@ pub fn run_desktop() -> ! {
         }),
         desktop.add_shape(Shape::Text {
             x: 20,
-            y: screen_size.1 as usize - 385,
+            y: screen_size.1 as usize - 290,
             content: "Notepad".to_string(),
             color: Color::BLACK,
             background_color: TASKBAR_COLOR,
@@ -173,9 +173,9 @@ pub fn run_desktop() -> ! {
             hide: true,
         }),
         0,
-        screen_size.1 as usize - 400,
+        screen_size.1 as usize - 305,
         200,
-        50,
+        45,
         "Notepad",
     ));
 

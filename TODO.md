@@ -2,6 +2,7 @@
  - [x] Better start menu button styles
  - [ ] List windows on the taskbar
  - [ ] Make windows focusable
- - [ ] Sysinfo/notepad app
+ - [ ] Sysinfo
+ - [ ] Fix notepad bugs
  - [x] More font sizes
  - [x] Fix text rendering non 100% opacity bg colors
