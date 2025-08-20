@@ -21,6 +21,7 @@ futures-util = { version = "0.3.31", default-features = false, features = ["allo
 spinning_top = "0.3.0"
 hashbrown = "0.15.4"
 ps2-mouse = "0.1.4"
+raw-cpuid = "11.5.0"
 
 [dependencies.noto-sans-mono-bitmap]
 version = "0.3"

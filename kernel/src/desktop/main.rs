@@ -1,7 +1,7 @@
 use crate::{
     desktop::{
         input::{CLICK_QUEUE, CurrentMouseState, SCANCODE_QUEUE, STATE_QUEUE, init_queues},
-        window_manager::{WindowManager, launch_calculator, launch_notepad},
+        window_manager::{WindowManager, launch_calculator, launch_notepad, launch_sysinfo},
     },
     framebuffer::{self, Color, FrameBufferWriter, SCREEN_SIZE},
     serial_println,
@@ -179,6 +179,34 @@ pub fn run_desktop() -> ! {
         "Notepad",
     ));
 
+    // SysInfo start button
+    start_menu_entries.push((
+        desktop.add_shape(Shape::Rectangle {
+            x: 10,
+            y: screen_size.1 as usize - 215,
+            width: 180,
+            height: 1,
+            color: Color::BLACK,
+            filled: true,
+            hide: true,
+        }),
+        desktop.add_shape(Shape::Text {
+            x: 20,
+            y: screen_size.1 as usize - 245,
+            content: "System Info".to_string(),
+            color: Color::BLACK,
+            background_color: TASKBAR_COLOR,
+            font_size: RasterHeight::Size20,
+            font_weight: FontWeight::Regular,
+            hide: true,
+        }),
+        0,
+        screen_size.1 as usize - 260,
+        200,
+        45,
+        "System Info",
+    ));
+
     // Time and date background
     desktop.add_shape(Shape::Rectangle {
         x: screen_size.0 as usize - 95,
@@ -287,6 +315,18 @@ pub fn run_desktop() -> ! {
                         }
                         if *label == "Notepad" {
                             launch_notepad(&mut window_manager);
+
+                            start_menu_open = false;
+                            for (idx, label_idx, _, _, _, _, _) in &start_menu_entries {
+                                desktop.hide_shape(*idx);
+                                desktop.hide_shape(*label_idx);
+                            }
+
+                            handled = true;
+                            break;
+                        }
+                        if *label == "System Info" {
+                            launch_sysinfo(&mut window_manager);
 
                             start_menu_open = false;
                             for (idx, label_idx, _, _, _, _, _) in &start_menu_entries {

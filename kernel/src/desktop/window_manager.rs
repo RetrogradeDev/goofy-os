@@ -5,7 +5,7 @@ use alloc::{
 use pc_keyboard::KeyCode;
 
 use crate::{
-    desktop::{calculator::Calculator, notepad::Notepad},
+    desktop::{calculator::Calculator, notepad::Notepad, sysinfo::SysInfo},
     framebuffer::{Color, FrameBufferWriter},
     surface::{Rect, Surface},
 };
@@ -19,6 +19,7 @@ pub struct DragCache {
 pub enum Application {
     Calculator(Calculator),
     Notepad(Notepad),
+    SysInfo(SysInfo),
 }
 
 pub struct Window {
@@ -50,6 +51,7 @@ impl Window {
         let background_color = application.as_ref().map_or(Color::BLACK, |app| match app {
             Application::Calculator(_) => Color::GRAY,
             Application::Notepad(_) => Color::WHITE,
+            Application::SysInfo(_) => Color::DARKGRAY,
         });
         let surface = Surface::new(width, height, background_color);
 
@@ -100,6 +102,9 @@ impl Window {
             }
             Some(Application::Notepad(notepad)) => {
                 notepad.render(&mut self.surface);
+            }
+            Some(Application::SysInfo(sysinfo)) => {
+                sysinfo.render(&mut self.surface);
             }
             None => {}
         }
@@ -324,6 +329,9 @@ impl WindowManager {
             Some(Application::Notepad(notepad)) => {
                 notepad.init(&mut window.surface);
             }
+            Some(Application::SysInfo(sysinfo)) => {
+                sysinfo.init(&mut window.surface);
+            }
             None => {}
         }
 
@@ -378,6 +386,13 @@ impl WindowManager {
                     let y = (y as usize).saturating_sub(window.y);
 
                     calculator.handle_mouse_click(x, y);
+                    return (true, None);
+                }
+                if let Some(Application::SysInfo(sysinfo)) = &mut window.application {
+                    let x = (x as usize).saturating_sub(window.x);
+                    let y = (y as usize).saturating_sub(window.y);
+
+                    sysinfo.handle_mouse_click(x, y);
                     return (true, None);
                 }
             }
@@ -524,6 +539,20 @@ pub fn launch_notepad(window_manager: &mut WindowManager) {
         "Notepad".to_string(),
         Some(crate::desktop::window_manager::Application::Notepad(
             Notepad::new(),
+        )),
+    ));
+}
+
+pub fn launch_sysinfo(window_manager: &mut WindowManager) {
+    window_manager.add_window(Window::new(
+        200,
+        100,
+        400,
+        350,
+        3,
+        "System Information".to_string(),
+        Some(crate::desktop::window_manager::Application::SysInfo(
+            SysInfo::new(),
         )),
     ));
 }

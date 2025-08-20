@@ -9,9 +9,12 @@ use core::panic::PanicInfo;
 extern crate alloc;
 
 use bootloader_api::{BootInfo, entry_point};
+use kernel::sysinfo::{STACK_BASE, get_stack_pointer};
 use kernel::{desktop::main::run_desktop, memory::BootInfoFrameAllocator, println, serial_println};
 
 use bootloader_api::config::{BootloaderConfig, Mapping};
+use kernel::{allocator, memory};
+use x86_64::VirtAddr;
 use x86_64::instructions::interrupts;
 
 pub static BOOTLOADER_CONFIG: BootloaderConfig = {
@@ -23,8 +26,7 @@ pub static BOOTLOADER_CONFIG: BootloaderConfig = {
 entry_point!(kernel_main, config = &BOOTLOADER_CONFIG);
 
 fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
-    use kernel::{allocator, memory};
-    use x86_64::VirtAddr;
+    unsafe { STACK_BASE = get_stack_pointer() as usize };
 
     serial_println!("Booting goofy OS...");
     serial_println!("Bootloader information: {:#?}", boot_info);

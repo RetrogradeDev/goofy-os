@@ -133,6 +133,11 @@ impl Color {
     }
 
     pub const BLACK: Color = Color { r: 0, g: 0, b: 0 };
+    pub const DARKGRAY: Color = Color {
+        r: 50,
+        g: 50,
+        b: 50,
+    };
     pub const GRAY: Color = Color {
         r: 150,
         g: 150,

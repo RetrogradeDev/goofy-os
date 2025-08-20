@@ -24,6 +24,7 @@ pub mod interrupts;
 pub mod memory;
 pub mod serial;
 pub mod surface;
+pub mod sysinfo;
 pub mod time;
 
 use bootloader_api::config::{BootloaderConfig, Mapping};
