@@ -4,14 +4,14 @@ use noto_sans_mono_bitmap::{FontWeight, RasterHeight};
 use crate::{
     framebuffer::Color,
     surface::{Shape, Surface},
-    sysinfo::{SystemInfo, estimate_stack_usage, format_memory_size},
+    sysinfo::{SystemInfo, estimate_heap_usage, estimate_stack_usage, format_memory_size},
 };
 
 pub struct SysInfo {
     system_info: SystemInfo,
     text_lines: Vec<usize>, // Shape indices for text lines
-    previous_stack_usage: usize,
     refresh_button_region: (usize, usize, usize, usize), // (x, y, width, height)
+    refreshed: bool,
 }
 
 impl SysInfo {
@@ -19,8 +19,8 @@ impl SysInfo {
         Self {
             system_info: SystemInfo::gather(),
             text_lines: Vec::new(),
-            previous_stack_usage: 0,
             refresh_button_region: (0, 0, 0, 0),
+            refreshed: false,
         }
     }
 
@@ -160,7 +160,6 @@ impl SysInfo {
         y_offset += line_height;
 
         let stack_usage = estimate_stack_usage();
-        self.previous_stack_usage = stack_usage;
         self.text_lines.push(surface.add_shape(Shape::Text {
             x: x_start,
             y: y_offset,
@@ -232,7 +231,7 @@ impl SysInfo {
         y_offset += 10;
 
         // Refresh button
-        self.refresh_button_region = (x_start, y_offset, 100, 25);
+        self.refresh_button_region = (x_start, y_offset, 173, 25);
         surface.add_shape(Shape::Rectangle {
             x: self.refresh_button_region.0,
             y: self.refresh_button_region.1,
@@ -246,23 +245,11 @@ impl SysInfo {
         surface.add_shape(Shape::Text {
             x: self.refresh_button_region.0 + 20,
             y: self.refresh_button_region.1 + 5,
-            content: "Refresh".to_string(),
+            content: "Refresh Memory Data".to_string(),
             color: Color::BLACK,
             background_color: Color::new(200, 200, 255),
             font_size: RasterHeight::Size16,
             font_weight: FontWeight::Regular,
-            hide: false,
-        });
-
-        // Info text
-        surface.add_shape(Shape::Text {
-            x: x_start + 120,
-            y: y_offset + 8,
-            content: "Updates stack usage".to_string(),
-            color: Color::WHITE,
-            background_color: Color::DARKGRAY,
-            font_size: RasterHeight::Size16,
-            font_weight: FontWeight::Light,
             hide: false,
         });
     }
@@ -279,24 +266,37 @@ impl SysInfo {
     }
 
     fn refresh_data(&mut self) {
-        // Update system information (mainly dynamic data like stack usage)
-        self.system_info = SystemInfo::gather();
+        self.refreshed = true;
     }
 
     pub fn render(&mut self, surface: &mut Surface) {
-        // Update stack usage if it changed significantly
-        let current_stack_usage = estimate_stack_usage();
-        if (current_stack_usage as i32 - self.previous_stack_usage as i32).abs() > 100 {
-            self.previous_stack_usage = current_stack_usage;
+        if self.refreshed {
+            let stack_usage = estimate_stack_usage();
+            let heap_usage = estimate_heap_usage();
 
-            if self.text_lines.len() > 9 {
-                let stack_text = format!(
-                    "Stack: {} / {}",
-                    format_memory_size(current_stack_usage),
+            let heap_idx = 8;
+            let stack_idx = 9;
+
+            surface.update_text_content(
+                heap_idx,
+                format!(
+                    "Heap: {}/{}",
+                    format_memory_size(heap_usage),
+                    format_memory_size(self.system_info.heap_size)
+                ),
+                None,
+            );
+            surface.update_text_content(
+                stack_idx,
+                format!(
+                    "Stack: {}/{}",
+                    format_memory_size(stack_usage),
                     format_memory_size(self.system_info.stack_size)
-                );
-                surface.update_text_content(self.text_lines[9], stack_text, None);
-            }
+                ),
+                None,
+            );
+
+            self.refreshed = false;
         }
     }
 }

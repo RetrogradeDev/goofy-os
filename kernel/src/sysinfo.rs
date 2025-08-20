@@ -77,7 +77,7 @@ fn get_heap_info() -> HeapInfo {
     }
 }
 
-fn estimate_heap_usage() -> usize {
+pub fn estimate_heap_usage() -> usize {
     unsafe {
         let allocator = &raw mut ALLOCATOR;
         (*allocator).allocated()
