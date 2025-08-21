@@ -1,4 +1,3 @@
-use crate::serial_println;
 use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
@@ -85,6 +84,12 @@ pub struct FileEntry {
     pub is_directory: bool,
     pub size: u32,
     pub first_cluster: u32,
+
+    pub creation_date: u16,
+    pub creation_time: u16,
+    pub last_access_date: u16,
+    pub last_write_date: u16,
+    pub last_write_time: u16,
 }
 
 /// Trait for disk operations
@@ -111,45 +116,18 @@ impl<D: DiskOperations> Fat32FileSystem<D> {
 
         let boot_sector = unsafe { *(boot_sector_data.as_ptr() as *const Fat32BootSector) };
 
-        // Copy values to avoid packed struct alignment issues
-        let signature = boot_sector.bootable_partition_signature;
-        let sectors_per_fat_16 = boot_sector.sectors_per_fat_16;
-        let sectors_per_fat_32 = boot_sector.sectors_per_fat_32;
-        let root_dir_entries = boot_sector.root_dir_entries;
-
-        // Debug: Print some boot sector information
-        serial_println!("Boot sector signature: 0x{:04X}", signature);
-        serial_println!("Sectors per FAT (16-bit): {}", sectors_per_fat_16);
-        serial_println!("Sectors per FAT (32-bit): {}", sectors_per_fat_32);
-        serial_println!("Root dir entries: {}", root_dir_entries);
-
         // Verify this is a FAT32 filesystem
-        if signature != 0xAA55 {
+        if boot_sector.bootable_partition_signature != 0xAA55 {
             return Err("Invalid boot sector signature");
         }
 
-        if sectors_per_fat_16 != 0 {
+        if boot_sector.sectors_per_fat_16 != 0 {
             return Err("This is not a FAT32 filesystem (FAT16/12 detected)");
         }
 
         let fat_start_sector = boot_sector.reserved_sectors as u64;
         let fat_size = boot_sector.sectors_per_fat_32 as u64;
         let data_start_sector = fat_start_sector + (boot_sector.fat_count as u64 * fat_size);
-
-        let bytes_per_sector = boot_sector.bytes_per_sector;
-        let sectors_per_cluster = boot_sector.sectors_per_cluster;
-        let reserved_sectors = boot_sector.reserved_sectors;
-        let fat_count = boot_sector.fat_count;
-        let root_cluster = boot_sector.root_cluster;
-
-        serial_println!("FAT32 Filesystem detected:");
-        serial_println!("  Bytes per sector: {}", bytes_per_sector);
-        serial_println!("  Sectors per cluster: {}", sectors_per_cluster);
-        serial_println!("  Reserved sectors: {}", reserved_sectors);
-        serial_println!("  FAT count: {}", fat_count);
-        serial_println!("  Root cluster: {}", root_cluster);
-        serial_println!("  FAT start sector: {}", fat_start_sector);
-        serial_println!("  Data start sector: {}", data_start_sector);
 
         Ok(Fat32FileSystem {
             disk,
@@ -283,6 +261,11 @@ impl<D: DiskOperations> Fat32FileSystem<D> {
             is_directory: (entry.attributes & attributes::DIRECTORY) != 0,
             size: entry.file_size,
             first_cluster,
+            creation_date: entry.creation_date,
+            creation_time: entry.creation_time,
+            last_access_date: entry.last_access_date,
+            last_write_date: entry.last_write_date,
+            last_write_time: entry.last_write_time,
         }
     }
 
@@ -525,19 +508,25 @@ impl<D: DiskOperations> Fat32FileSystem<D> {
             return Err("File already exists");
         }
 
-        // Calculate number of clusters needed
-        let cluster_size = (self.sectors_per_cluster * self.bytes_per_sector) as usize;
-        let num_clusters = (data.len() + cluster_size - 1) / cluster_size;
+        let first_cluster = if data.is_empty() {
+            0
+        } else {
+            // Calculate number of clusters needed
+            let cluster_size = (self.sectors_per_cluster * self.bytes_per_sector) as usize;
+            let num_clusters = (data.len() + cluster_size - 1) / cluster_size;
 
-        if num_clusters == 0 {
-            return Err("Cannot create empty file");
-        }
+            if num_clusters == 0 {
+                return Err("Cannot create empty file");
+            }
 
-        // Allocate clusters for the file
-        let first_cluster = self.allocate_cluster_chain(num_clusters as u32)?;
+            // Allocate clusters for the file
+            let first_cluster = self.allocate_cluster_chain(num_clusters as u32)?;
 
-        // Write the file data
-        self.write_file(first_cluster, data)?;
+            // Write the file data
+            self.write_file(first_cluster, data)?;
+
+            first_cluster
+        };
 
         // Create directory entry
         self.create_directory_entry(

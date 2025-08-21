@@ -174,32 +174,17 @@ impl ProcessAddressSpace {
             let frame = PhysFrame::containing_address(physical_addr);
             let page = Page::containing_address(virtual_addr);
 
-            serial_println!(
-                "Mapping virtual address {:?} to physical address {:?}, page: {:?}, frame: {:?}",
-                virtual_addr,
-                physical_addr,
-                page,
-                frame
-            );
-
             // Map memory with user accessible flags
             let final_flags = flags | PageTableFlags::USER_ACCESSIBLE;
-            serial_println!("Final page table flags being set: {:?}", final_flags);
 
             mapper
                 .map_to(page, frame, final_flags, frame_allocator)?
                 .flush();
-
-            // Check what the page table entry actually contains after mapping
-            if let Ok(frame) = mapper.translate_page(page) {
-                serial_println!("Page table entry after mapping: frame={:?}", frame);
-            }
         }
         Ok(())
     }
 
     pub fn cleanup(&mut self) {
-        // Here we would clean up the address space, but for now we just print a message
         serial_println!(
             "Cleaning up address space for page table frame: {:?}",
             self.page_table_frame.start_address()
@@ -210,20 +195,10 @@ impl ProcessAddressSpace {
             self.physical_memory_offset + self.page_table_frame.start_address().as_u64();
         let page_table_ptr: *mut PageTable = page_table_virt.as_mut_ptr();
 
-        serial_println!(
-            "Zeroing out page table at virtual address: {:?}",
-            page_table_virt
-        );
-
         unsafe {
             let page_table_ref = &mut *page_table_ptr;
             page_table_ref.zero();
         }
-
-        serial_println!(
-            "Address space cleanup complete for page table frame: {:?}",
-            self.page_table_frame.start_address()
-        );
     }
 
     /// Create a dummy ProcessAddressSpace for kernel processes

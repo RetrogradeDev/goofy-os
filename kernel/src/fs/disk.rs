@@ -3,8 +3,8 @@ use x86_64::instructions::port::{Port, PortReadOnly, PortWriteOnly};
 
 /// Primary ATA controller ports
 const PRIMARY_ATA_DATA: u16 = 0x1F0;
-const PRIMARY_ATA_ERROR: u16 = 0x1F1;
-const PRIMARY_ATA_FEATURES: u16 = 0x1F1;
+// const PRIMARY_ATA_ERROR: u16 = 0x1F1;
+// const PRIMARY_ATA_FEATURES: u16 = 0x1F1;
 const PRIMARY_ATA_SECTOR_COUNT: u16 = 0x1F2;
 const PRIMARY_ATA_LBA_LOW: u16 = 0x1F3;
 const PRIMARY_ATA_LBA_MID: u16 = 0x1F4;
@@ -22,15 +22,15 @@ const ATA_CMD_IDENTIFY: u8 = 0xEC;
 /// ATA status bits
 const ATA_STATUS_BSY: u8 = 0x80;
 const ATA_STATUS_DRDY: u8 = 0x40;
-const ATA_STATUS_DF: u8 = 0x20;
+// const ATA_STATUS_DF: u8 = 0x20;
 const ATA_STATUS_DRQ: u8 = 0x08;
 const ATA_STATUS_ERR: u8 = 0x01;
 
 /// Simple ATA disk driver
 pub struct AtaDisk {
     data_port: Port<u16>,
-    error_port: PortReadOnly<u8>,
-    features_port: PortWriteOnly<u8>,
+    // error_port: PortReadOnly<u8>,
+    // features_port: PortWriteOnly<u8>,
     sector_count_port: Port<u8>,
     lba_low_port: Port<u8>,
     lba_mid_port: Port<u8>,
@@ -47,8 +47,8 @@ impl AtaDisk {
     pub fn new_primary(drive_number: u8) -> Self {
         AtaDisk {
             data_port: Port::new(PRIMARY_ATA_DATA),
-            error_port: PortReadOnly::new(PRIMARY_ATA_ERROR),
-            features_port: PortWriteOnly::new(PRIMARY_ATA_FEATURES),
+            // error_port: PortReadOnly::new(PRIMARY_ATA_ERROR),
+            // features_port: PortWriteOnly::new(PRIMARY_ATA_FEATURES),
             sector_count_port: Port::new(PRIMARY_ATA_SECTOR_COUNT),
             lba_low_port: Port::new(PRIMARY_ATA_LBA_LOW),
             lba_mid_port: Port::new(PRIMARY_ATA_LBA_MID),

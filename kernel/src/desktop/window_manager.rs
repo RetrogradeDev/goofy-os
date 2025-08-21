@@ -5,7 +5,9 @@ use alloc::{
 use pc_keyboard::KeyCode;
 
 use crate::{
-    desktop::{calculator::Calculator, notepad::Notepad, sysinfo::SysInfo},
+    desktop::{
+        calculator::Calculator, filemanager::FileManager, notepad::Notepad, sysinfo::SysInfo,
+    },
     framebuffer::{Color, FrameBufferWriter},
     surface::{Rect, Surface},
 };
@@ -18,6 +20,7 @@ pub struct DragCache {
 
 pub enum Application {
     Calculator(Calculator),
+    FileManager(FileManager),
     Notepad(Notepad),
     SysInfo(SysInfo),
 }
@@ -50,6 +53,7 @@ impl Window {
     ) -> Self {
         let background_color = application.as_ref().map_or(Color::BLACK, |app| match app {
             Application::Calculator(_) => Color::GRAY,
+            Application::FileManager(_) => Color::new(240, 240, 240),
             Application::Notepad(_) => Color::WHITE,
             Application::SysInfo(_) => Color::DARKGRAY,
         });
@@ -99,6 +103,9 @@ impl Window {
         match &mut self.application {
             Some(Application::Calculator(calculator)) => {
                 calculator.render(&mut self.surface);
+            }
+            Some(Application::FileManager(filemanager)) => {
+                filemanager.render(&mut self.surface);
             }
             Some(Application::Notepad(notepad)) => {
                 notepad.render(&mut self.surface);
@@ -326,6 +333,9 @@ impl WindowManager {
             Some(Application::Calculator(calculator)) => {
                 calculator.init(&mut window.surface);
             }
+            Some(Application::FileManager(filemanager)) => {
+                filemanager.setup_ui(&mut window.surface);
+            }
             Some(Application::Notepad(notepad)) => {
                 notepad.init(&mut window.surface);
             }
@@ -386,6 +396,13 @@ impl WindowManager {
                     let y = (y as usize).saturating_sub(window.y);
 
                     calculator.handle_mouse_click(x, y);
+                    return (true, None);
+                }
+                if let Some(Application::FileManager(filemanager)) = &mut window.application {
+                    let x = (x as usize).saturating_sub(window.x);
+                    let y = (y as usize).saturating_sub(window.y);
+
+                    filemanager.handle_click(x, y, &mut window.surface);
                     return (true, None);
                 }
                 if let Some(Application::SysInfo(sysinfo)) = &mut window.application {
@@ -495,21 +512,35 @@ impl WindowManager {
     }
 
     pub fn handle_char_input(&mut self, ch: char) {
-        // Send character input to the focused window (for now, just the first notepad window)
+        // Send character input to the focused window (for now, just the first notepad or filemanager window)
         for window in &mut self.windows {
-            if let Some(Application::Notepad(notepad)) = &mut window.application {
-                notepad.handle_char_input(ch);
-                break; // Only send to first notepad for now
+            match &mut window.application {
+                Some(Application::Notepad(notepad)) => {
+                    notepad.handle_char_input(ch);
+                    break; // Only send to first notepad for now
+                }
+                Some(Application::FileManager(filemanager)) => {
+                    filemanager.handle_char_input(ch, &mut window.surface);
+                    break; // Only send to first filemanager for now
+                }
+                _ => {}
             }
         }
     }
 
     pub fn handle_key_input(&mut self, key: KeyCode) {
-        // Handle key input for focused window (for now, just the first notepad window)
+        // Handle key input for focused window (for now, just the first notepad or filemanager window)
         for window in &mut self.windows {
-            if let Some(Application::Notepad(notepad)) = &mut window.application {
-                notepad.handle_key_input(key);
-                break; // Only send to first notepad for now
+            match &mut window.application {
+                Some(Application::Notepad(notepad)) => {
+                    notepad.handle_key_input(key);
+                    break; // Only send to first notepad for now
+                }
+                Some(Application::FileManager(filemanager)) => {
+                    filemanager.handle_key_input(key, &mut window.surface);
+                    break; // Only send to first filemanager for now
+                }
+                _ => {}
             }
         }
     }
@@ -525,6 +556,20 @@ pub fn launch_calculator(window_manager: &mut WindowManager) {
         "Calculator".to_string(),
         Some(crate::desktop::window_manager::Application::Calculator(
             Calculator::new(),
+        )),
+    ));
+}
+
+pub fn launch_filemanager(window_manager: &mut WindowManager) {
+    window_manager.add_window(Window::new(
+        120,
+        80,
+        500,
+        400,
+        4,
+        "File Manager".to_string(),
+        Some(crate::desktop::window_manager::Application::FileManager(
+            FileManager::new(),
         )),
     ));
 }

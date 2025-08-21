@@ -6,3 +6,10 @@
  - [ ] Fix notepad bugs
  - [x] More font sizes
  - [x] Fix text rendering non 100% opacity bg colors
+ - [ ] FS
+   - [ ] Explorer
+     - [ ] Display apps to open file
+     - [ ] Folders
+     - [ ] Fix UI rendering to don't redraw everything
+   - [ ] Display fs info in sysinfo
+   - [ ] Save notepad to fs

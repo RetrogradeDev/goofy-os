@@ -44,20 +44,14 @@ pub fn init(physical_memory_offset: x86_64::VirtAddr) {
     // Initialize the physical memory offset
     PHYSICAL_MEMORY_OFFSET.init_once(|| physical_memory_offset);
 
-    serial_println!("Initializing interrupts...");
     interrupts::init_idt();
-    serial_println!("Initializing GDT...");
     gdt::init();
-    serial_println!("Initializing mouse input...");
     init_mouse();
 
-    serial_println!("Initializing PICs...");
     unsafe { interrupts::PICS.lock().initialize() };
-    serial_println!("Enabling interrupts...");
 
     // Disable interrupts to prevent switching to processes before they are initialized
     x86_64::instructions::interrupts::disable();
-    serial_println!("Done!");
 }
 
 pub fn hlt_loop() -> ! {

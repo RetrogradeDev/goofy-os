@@ -1,4 +1,5 @@
 pub mod calculator;
+pub mod filemanager;
 pub mod input;
 pub mod main;
 pub mod notepad;
