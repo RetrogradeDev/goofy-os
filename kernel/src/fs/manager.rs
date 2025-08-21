@@ -4,6 +4,7 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use lazy_static::lazy_static;
 use spin::Mutex;
+use x86_64::instructions::interrupts;
 
 lazy_static! {
     pub static ref FILESYSTEM: Mutex<Option<Fat32FileSystem<AtaDisk>>> = Mutex::new(None);
@@ -109,4 +110,68 @@ pub fn read_text_file(first_cluster: u32, file_size: u32) -> Result<String, &'st
         Ok(text) => Ok(text),
         Err(_) => Err("File is not valid UTF-8"),
     }
+}
+
+/// Create a new file in the root directory
+pub fn create_file_in_root(filename: &str, data: &[u8]) -> Result<(), &'static str> {
+    interrupts::without_interrupts(|| {
+        let mut fs_guard = FILESYSTEM.lock();
+        match fs_guard.as_mut() {
+            Some(fs) => fs.create_file_in_root(filename, data),
+            None => Err("Filesystem not initialized"),
+        }
+    })
+}
+
+/// Create a file in a specific directory
+pub fn create_file_in_directory(
+    dir_cluster: u32,
+    filename: &str,
+    data: &[u8],
+) -> Result<(), &'static str> {
+    interrupts::without_interrupts(|| {
+        let mut fs_guard = FILESYSTEM.lock();
+        match fs_guard.as_mut() {
+            Some(fs) => fs.create_file(dir_cluster, filename, data),
+            None => Err("Filesystem not initialized"),
+        }
+    })
+}
+
+/// Delete a file from the root directory
+pub fn delete_file_from_root(filename: &str) -> Result<(), &'static str> {
+    interrupts::without_interrupts(|| {
+        let mut fs_guard = FILESYSTEM.lock();
+        match fs_guard.as_mut() {
+            Some(fs) => fs.delete_file_from_root(filename),
+            None => Err("Filesystem not initialized"),
+        }
+    })
+}
+
+/// Delete a file from a specific directory
+pub fn delete_file_from_directory(dir_cluster: u32, filename: &str) -> Result<(), &'static str> {
+    interrupts::without_interrupts(|| {
+        let mut fs_guard = FILESYSTEM.lock();
+        match fs_guard.as_mut() {
+            Some(fs) => fs.delete_file(dir_cluster, filename),
+            None => Err("Filesystem not initialized"),
+        }
+    })
+}
+
+/// Write data to an existing file
+pub fn write_file_data(first_cluster: u32, data: &[u8]) -> Result<(), &'static str> {
+    interrupts::without_interrupts(|| {
+        let mut fs_guard = FILESYSTEM.lock();
+        match fs_guard.as_mut() {
+            Some(fs) => fs.write_file(first_cluster, data),
+            None => Err("Filesystem not initialized"),
+        }
+    })
+}
+
+/// Create a text file in the root directory
+pub fn create_text_file_in_root(filename: &str, content: &str) -> Result<(), &'static str> {
+    create_file_in_root(filename, content.as_bytes())
 }

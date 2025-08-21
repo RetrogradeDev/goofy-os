@@ -107,6 +107,42 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
         }
     }
 
+    // Test filesystem write operations
+    serial_println!("Testing filesystem write operations...");
+
+    // Create a test file
+    let test_content =
+        "Hello from the FAT32 filesystem!\nThis is a test file created by goofy OS.\n";
+    match kernel::fs::manager::create_text_file_in_root("TEST.TXT", test_content) {
+        Ok(_) => {
+            serial_println!("Successfully created TEST.TXT");
+            println!("Created test file: TEST.TXT");
+
+            // Try to read it back
+            match kernel::fs::manager::find_file_in_root("TEST.TXT") {
+                Ok(Some(file)) => {
+                    match kernel::fs::manager::read_text_file(file.first_cluster, file.size) {
+                        Ok(content) => {
+                            serial_println!("File content read back: {}", content);
+                        }
+                        Err(e) => {
+                            serial_println!("Failed to read back file content: {}", e);
+                        }
+                    }
+                }
+                Ok(None) => {
+                    serial_println!("File not found after creation");
+                }
+                Err(e) => {
+                    serial_println!("Error finding created file: {}", e);
+                }
+            }
+        }
+        Err(e) => {
+            serial_println!("Failed to create test file: {}", e);
+        }
+    }
+
     #[cfg(test)]
     test_main();
 
