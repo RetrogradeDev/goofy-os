@@ -79,8 +79,42 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
         kernel::time::get_ms_since_epoch()
     );
 
-    // The kernel should continue running and let the scheduler handle task execution
+    // Initialize the filesystem after interrupts are enabled
+    serial_println!("Enabling interrupts...");
     interrupts::enable();
+    serial_println!("Interrupts enabled successfully!");
+
+    match kernel::fs::manager::init_filesystem() {
+        Ok(_) => {
+            serial_println!("Filesystem initialized successfully!");
+            println!("Filesystem ready!");
+        }
+        Err(e) => {
+            serial_println!("Failed to initialize filesystem: {}", e);
+            println!("Filesystem initialization failed: {}", e);
+        }
+    }
+
+    match kernel::fs::manager::list_root_files() {
+        Ok(entries) => {
+            serial_println!("Root directory files:");
+            for entry in entries {
+                serial_println!(" - {}", entry.name);
+            }
+        }
+        Err(e) => {
+            serial_println!("Failed to list root directory files: {}", e);
+        }
+    }
+
+    #[cfg(test)]
+    test_main();
+
+    serial_println!("Current UTC time: {:#?}", kernel::time::get_utc_time());
+    serial_println!(
+        "Milliseconds since epoch: {}",
+        kernel::time::get_ms_since_epoch()
+    );
 
     run_desktop();
 }

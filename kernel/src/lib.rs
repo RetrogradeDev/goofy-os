@@ -19,6 +19,7 @@ pub mod allocator;
 pub mod desktop;
 pub mod exit;
 pub mod framebuffer;
+pub mod fs;
 pub mod gdt;
 pub mod interrupts;
 pub mod memory;

@@ -251,7 +251,6 @@ version = "0.1.0"
 dependencies = [
  "bootloader",
  "kernel",
- "ovmf-prebuilt",
 ]
 
 [[package]]
@@ -399,12 +398,6 @@ name = "once_cell"
 version = "1.21.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "42f5e15c9953c5e4ccceeb2e7382a716482c34515315f7b03532b8b4e8393d2d"
-
-[[package]]
-name = "ovmf-prebuilt"
-version = "0.1.0-alpha.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fa50141d081512ab30fd9e7e7692476866df5098b028536ad6680212e717fa8d"
 
 [[package]]
 name = "pc-keyboard"
