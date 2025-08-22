@@ -63,11 +63,6 @@ pub struct CpuInfo {
 }
 
 fn get_heap_info() -> HeapInfo {
-    // For now, we'll return estimated values
-    // The linked_list_allocator doesn't provide detailed statistics
-    // In a real implementation, you'd need to track allocations manually
-
-    // We can estimate usage based on typical allocation patterns
     let estimated_used = estimate_heap_usage();
 
     HeapInfo {
@@ -177,12 +172,8 @@ pub fn get_stack_pointer() -> u64 {
 }
 
 pub fn estimate_stack_usage() -> usize {
-    // This is a very rough estimation
-    // In a real kernel, you'd track stack bounds more precisely
     let current_sp = get_stack_pointer();
 
-    // Estimate based on how far we are from a "typical" stack start
-    // This is not precise but gives a rough idea
     let estimated_used = (unsafe { STACK_BASE } - current_sp as usize);
 
     // Clamp to reasonable values

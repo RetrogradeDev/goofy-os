@@ -680,8 +680,10 @@ impl<D: DiskOperations> Fat32FileSystem<D> {
             return Err("Cannot delete directory using delete_file");
         }
 
-        // Free the cluster chain
-        self.free_cluster_chain(file_entry.first_cluster)?;
+        // Free the cluster chain (only if the file has allocated clusters)
+        if file_entry.first_cluster > 0 {
+            self.free_cluster_chain(file_entry.first_cluster)?;
+        }
 
         // Mark directory entry as deleted
         self.mark_directory_entry_deleted(dir_cluster, filename)?;
@@ -691,6 +693,10 @@ impl<D: DiskOperations> Fat32FileSystem<D> {
 
     /// Free a cluster chain
     fn free_cluster_chain(&mut self, first_cluster: u32) -> Result<(), &'static str> {
+        if first_cluster < 2 {
+            return Err("Invalid cluster number for freeing");
+        }
+
         let mut current_cluster = first_cluster;
 
         while current_cluster < cluster_values::END_OF_CHAIN {

@@ -9,6 +9,7 @@ use crate::{
         calculator::Calculator, filemanager::FileManager, notepad::Notepad, sysinfo::SysInfo,
     },
     framebuffer::{Color, FrameBufferWriter},
+    fs::fat32::FileEntry,
     surface::{Rect, Surface},
 };
 
@@ -402,7 +403,11 @@ impl WindowManager {
                     let x = (x as usize).saturating_sub(window.x);
                     let y = (y as usize).saturating_sub(window.y);
 
-                    filemanager.handle_click(x, y, &mut window.surface);
+                    let (_, open_app) = filemanager.handle_click(x, y, &mut window.surface);
+                    if let Some((entry, app)) = open_app {
+                        self.open_app_handler(entry, app);
+                    }
+
                     return (true, None);
                 }
                 if let Some(Application::SysInfo(sysinfo)) = &mut window.application {
@@ -436,6 +441,14 @@ impl WindowManager {
         }
 
         (false, None)
+    }
+
+    fn open_app_handler(&mut self, file: FileEntry, app: String) {
+        match app.as_str() {
+            "notepad" => launch_notepad_with_file(self, file),
+            "calculator" => launch_calculator(self), // Who tf opens his files in calculator?!
+            _ => {}
+        }
     }
 
     pub fn handle_mouse_down(&mut self, x: i16, y: i16, framebuffer: &FrameBufferWriter) {
@@ -517,11 +530,11 @@ impl WindowManager {
             match &mut window.application {
                 Some(Application::Notepad(notepad)) => {
                     notepad.handle_char_input(ch);
-                    break; // Only send to first notepad for now
+                    // break; // Only send to first notepad for now
                 }
                 Some(Application::FileManager(filemanager)) => {
                     filemanager.handle_char_input(ch, &mut window.surface);
-                    break; // Only send to first filemanager for now
+                    // break; // Only send to first filemanager for now
                 }
                 _ => {}
             }
@@ -534,11 +547,11 @@ impl WindowManager {
             match &mut window.application {
                 Some(Application::Notepad(notepad)) => {
                     notepad.handle_key_input(key);
-                    break; // Only send to first notepad for now
+                    // break; // Only send to first notepad for now
                 }
                 Some(Application::FileManager(filemanager)) => {
                     filemanager.handle_key_input(key, &mut window.surface);
-                    break; // Only send to first filemanager for now
+                    // break; // Only send to first filemanager for now
                 }
                 _ => {}
             }
@@ -554,9 +567,7 @@ pub fn launch_calculator(window_manager: &mut WindowManager) {
         315,
         1,
         "Calculator".to_string(),
-        Some(crate::desktop::window_manager::Application::Calculator(
-            Calculator::new(),
-        )),
+        Some(Application::Calculator(Calculator::new())),
     ));
 }
 
@@ -568,9 +579,7 @@ pub fn launch_filemanager(window_manager: &mut WindowManager) {
         400,
         4,
         "File Manager".to_string(),
-        Some(crate::desktop::window_manager::Application::FileManager(
-            FileManager::new(),
-        )),
+        Some(Application::FileManager(FileManager::new())),
     ));
 }
 
@@ -582,9 +591,19 @@ pub fn launch_notepad(window_manager: &mut WindowManager) {
         400,
         2,
         "Notepad".to_string(),
-        Some(crate::desktop::window_manager::Application::Notepad(
-            Notepad::new(),
-        )),
+        Some(Application::Notepad(Notepad::new(None))),
+    ));
+}
+
+pub fn launch_notepad_with_file(window_manager: &mut WindowManager, file: FileEntry) {
+    window_manager.add_window(Window::new(
+        150,
+        150,
+        600,
+        400,
+        2,
+        "Notepad".to_string(),
+        Some(Application::Notepad(Notepad::new(Some(file)))),
     ));
 }
 
@@ -596,8 +615,6 @@ pub fn launch_sysinfo(window_manager: &mut WindowManager) {
         350,
         3,
         "System Information".to_string(),
-        Some(crate::desktop::window_manager::Application::SysInfo(
-            SysInfo::new(),
-        )),
+        Some(Application::SysInfo(SysInfo::new())),
     ));
 }

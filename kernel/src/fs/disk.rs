@@ -76,7 +76,7 @@ impl AtaDisk {
 
     /// Wait for data to be ready
     fn wait_data(&mut self) -> Result<(), &'static str> {
-        let mut timeout = 10000;
+        let mut timeout = 100000;
         while timeout > 0 {
             let status = unsafe { self.status_port.read() };
             if (status & ATA_STATUS_BSY) == 0 {

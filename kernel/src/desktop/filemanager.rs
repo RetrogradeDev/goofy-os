@@ -9,7 +9,7 @@ use crate::{
     framebuffer::Color,
     fs::{
         fat32::FileEntry,
-        manager::{create_file_in_root, delete_file_from_root, list_root_files, read_text_file},
+        manager::{create_file_in_root, delete_file_from_root, list_root_files},
     },
     serial_println,
     surface::{Shape, Surface},
@@ -36,14 +36,13 @@ pub struct FileManager {
     selected_file_index: Option<usize>,
     scroll_offset: usize,
     input_text: String,
-    file_content: String,
     status_message: String,
+    open_file_options: Option<Vec<(usize, String)>>, // Y offset, name
+    selected_open_file_app: Option<String>,
 
     // UI element indices
-    file_list_bg_idx: Option<usize>,
     status_text_idx: Option<usize>,
     input_text_idx: Option<usize>,
-    content_text_idx: Option<usize>,
 
     // Button indices
     new_file_btn_idx: Option<usize>,
@@ -52,6 +51,7 @@ pub struct FileManager {
     back_btn_idx: Option<usize>,
     create_btn_idx: Option<usize>,
     confirm_delete_btn_idx: Option<usize>,
+    confirm_open_file_btn_idx: Option<usize>,
 }
 
 impl FileManager {
@@ -62,13 +62,12 @@ impl FileManager {
             selected_file_index: None,
             scroll_offset: 0,
             input_text: String::new(),
-            file_content: String::new(),
             status_message: "Ready".to_string(),
+            open_file_options: None,
+            selected_open_file_app: None,
 
-            file_list_bg_idx: None,
             status_text_idx: None,
             input_text_idx: None,
-            content_text_idx: None,
 
             new_file_btn_idx: None,
             delete_file_btn_idx: None,
@@ -76,10 +75,33 @@ impl FileManager {
             back_btn_idx: None,
             create_btn_idx: None,
             confirm_delete_btn_idx: None,
+            confirm_open_file_btn_idx: None,
         };
 
         fm.refresh_file_list();
         fm
+    }
+
+    fn load_recomended_open_list(
+        &self,
+        file_name: &String,
+    ) -> (Option<&'static str>, Vec<&'static str>) {
+        let recomended = if file_name.to_lowercase().ends_with(".txt") {
+            Some("notepad")
+        } else {
+            None
+        };
+
+        let other: Vec<&'static str> = if let Some(rec) = recomended {
+            match rec {
+                "notepad" => ["calculator"].to_vec(),
+                _ => ["notepad", "calculator"].to_vec(),
+            }
+        } else {
+            ["notepad", "calculator"].to_vec()
+        };
+
+        (recomended, other)
     }
 
     fn refresh_file_list(&mut self) {
@@ -110,10 +132,9 @@ impl FileManager {
     fn clear_ui(&mut self, surface: &mut Surface) {
         surface.clear_all_shapes();
 
-        self.file_list_bg_idx = None;
         self.status_text_idx = None;
         self.input_text_idx = None;
-        self.content_text_idx = None;
+        self.open_file_options = None;
 
         self.new_file_btn_idx = None;
         self.delete_file_btn_idx = None;
@@ -121,6 +142,7 @@ impl FileManager {
         self.back_btn_idx = None;
         self.create_btn_idx = None;
         self.confirm_delete_btn_idx = None;
+        self.confirm_open_file_btn_idx = None;
     }
 
     fn setup_browse_ui(&mut self, surface: &mut Surface) {
@@ -128,7 +150,7 @@ impl FileManager {
         let height = surface.height;
 
         // File list background
-        self.file_list_bg_idx = Some(surface.add_shape(Shape::Rectangle {
+        surface.add_shape(Shape::Rectangle {
             x: MARGIN,
             y: 40,
             width: width - 2 * MARGIN,
@@ -136,7 +158,7 @@ impl FileManager {
             color: Color::WHITE,
             filled: true,
             hide: false,
-        }));
+        });
 
         // File list border
         surface.add_shape(Shape::Rectangle {
@@ -308,7 +330,7 @@ impl FileManager {
         surface.add_shape(Shape::Text {
             x: MARGIN + 200,
             y: button_y + 5,
-            content: "View".to_string(),
+            content: "Open".to_string(),
             color: Color::BLACK,
             background_color: Color::new(180, 255, 180),
             font_size: RasterHeight::Size16,
@@ -581,7 +603,6 @@ impl FileManager {
     }
 
     fn setup_view_file_ui(&mut self, surface: &mut Surface) {
-        let width = surface.width;
         let height = surface.height;
 
         if let FileManagerMode::ViewFile(file) = &self.mode {
@@ -589,7 +610,18 @@ impl FileManager {
             surface.add_shape(Shape::Text {
                 x: MARGIN,
                 y: 50,
-                content: format!("Viewing: {}", file.name),
+                content: format!("Select an application to open: {}", file.name),
+                color: Color::BLACK,
+                background_color: Color::new(240, 240, 240),
+                font_size: RasterHeight::Size20,
+                font_weight: FontWeight::Bold,
+                hide: false,
+            });
+
+            surface.add_shape(Shape::Text {
+                x: MARGIN,
+                y: 70,
+                content: "Recomended:".to_string(),
                 color: Color::BLACK,
                 background_color: Color::new(240, 240, 240),
                 font_size: RasterHeight::Size16,
@@ -597,38 +629,87 @@ impl FileManager {
                 hide: false,
             });
 
-            // Content background
-            surface.add_shape(Shape::Rectangle {
-                x: MARGIN,
-                y: 80,
-                width: width - 2 * MARGIN,
-                height: height - 160,
-                color: Color::WHITE,
-                filled: true,
-                hide: false,
-            });
+            let (recommended, all) = self.load_recomended_open_list(&file.name);
 
-            surface.add_shape(Shape::Rectangle {
-                x: MARGIN,
-                y: 80,
-                width: width - 2 * MARGIN,
-                height: height - 160,
-                color: Color::BLACK,
-                filled: false,
-                hide: false,
-            });
+            if recommended.is_some() && self.selected_open_file_app.is_none() {
+                self.selected_open_file_app = recommended.map(|s| s.to_string());
+            }
 
-            // File content
-            self.content_text_idx = Some(surface.add_shape(Shape::Text {
-                x: MARGIN + 5,
-                y: 85,
-                content: self.file_content.clone(),
+            if recommended.is_some()
+                && self.selected_open_file_app == recommended.map(|s| s.to_string())
+            {
+                surface.add_shape(Shape::Rectangle {
+                    x: MARGIN,
+                    y: 90,
+                    width: 200,
+                    height: 20,
+                    color: Color::new(150, 200, 255),
+                    filled: true,
+                    hide: false,
+                });
+            }
+
+            self.open_file_options = Some(Vec::new());
+            if recommended.is_some() {
+                self.open_file_options
+                    .as_mut()
+                    .unwrap()
+                    .push((90, recommended.unwrap().to_string()));
+            }
+
+            surface.add_shape(Shape::Text {
+                x: MARGIN,
+                y: 90,
+                content: recommended
+                    .unwrap_or("No recommended apps found")
+                    .to_string(),
                 color: Color::BLACK,
-                background_color: Color::WHITE,
+                background_color: Color::new(240, 240, 240),
                 font_size: RasterHeight::Size16,
                 font_weight: FontWeight::Regular,
                 hide: false,
-            }));
+            });
+
+            surface.add_shape(Shape::Text {
+                x: MARGIN,
+                y: 110,
+                content: "Other:".to_string(),
+                color: Color::BLACK,
+                background_color: Color::new(240, 240, 240),
+                font_size: RasterHeight::Size16,
+                font_weight: FontWeight::Bold,
+                hide: false,
+            });
+
+            for (i, app) in all.iter().enumerate() {
+                if self.selected_open_file_app == Some(app.to_string()) {
+                    surface.add_shape(Shape::Rectangle {
+                        x: MARGIN,
+                        y: 130 + i * 20,
+                        width: 200,
+                        height: 20,
+                        color: Color::new(150, 200, 255),
+                        filled: true,
+                        hide: false,
+                    });
+                }
+
+                surface.add_shape(Shape::Text {
+                    x: MARGIN,
+                    y: 130 + i * 20,
+                    content: app.to_string(),
+                    color: Color::BLACK,
+                    background_color: Color::new(240, 240, 240),
+                    font_size: RasterHeight::Size16,
+                    font_weight: FontWeight::Regular,
+                    hide: false,
+                });
+
+                self.open_file_options
+                    .as_mut()
+                    .unwrap()
+                    .push((130 + i * 20, app.to_string()));
+            }
 
             // Back button
             let button_y = height - 60;
@@ -662,14 +743,50 @@ impl FileManager {
                 font_weight: FontWeight::Regular,
                 hide: false,
             });
+
+            self.confirm_open_file_btn_idx = Some(surface.add_shape(Shape::Rectangle {
+                x: MARGIN + 90,
+                y: button_y,
+                width: 80,
+                height: BUTTON_HEIGHT,
+                color: Color::new(180, 255, 180),
+                filled: true,
+                hide: false,
+            }));
+
+            surface.add_shape(Shape::Rectangle {
+                x: MARGIN + 90,
+                y: button_y,
+                width: 80,
+                height: BUTTON_HEIGHT,
+                color: Color::BLACK,
+                filled: false,
+                hide: false,
+            });
+
+            surface.add_shape(Shape::Text {
+                x: MARGIN + 115,
+                y: button_y + 5,
+                content: "Open".to_string(),
+                color: Color::BLACK,
+                background_color: Color::new(180, 255, 180),
+                font_size: RasterHeight::Size16,
+                font_weight: FontWeight::Regular,
+                hide: false,
+            });
         }
     }
 
-    pub fn handle_click(&mut self, x: usize, y: usize, surface: &mut Surface) -> bool {
+    pub fn handle_click(
+        &mut self,
+        x: usize,
+        y: usize,
+        surface: &mut Surface,
+    ) -> (bool, Option<(FileEntry, String)>) {
         match &self.mode {
-            FileManagerMode::Browse => self.handle_browse_click(x, y, surface),
-            FileManagerMode::NewFile => self.handle_new_file_click(x, y, surface),
-            FileManagerMode::DeleteFile => self.handle_delete_click(x, y, surface),
+            FileManagerMode::Browse => (self.handle_browse_click(x, y, surface), None),
+            FileManagerMode::NewFile => (self.handle_new_file_click(x, y, surface), None),
+            FileManagerMode::DeleteFile => (self.handle_delete_click(x, y, surface), None),
             FileManagerMode::ViewFile(_) => self.handle_view_click(x, y, surface),
         }
     }
@@ -712,7 +829,6 @@ impl FileManager {
             if self.is_button_clicked(x, y, MARGIN + 180, surface.height - 60, 80, BUTTON_HEIGHT) {
                 if let Some(idx) = self.selected_file_index {
                     if let Some(file) = self.files.get(idx).cloned() {
-                        self.load_file_content(&file);
                         self.mode = FileManagerMode::ViewFile(file);
                         self.setup_ui(surface);
                     }
@@ -765,16 +881,55 @@ impl FileManager {
         false
     }
 
-    fn handle_view_click(&mut self, x: usize, y: usize, surface: &mut Surface) -> bool {
+    fn handle_view_click(
+        &mut self,
+        x: usize,
+        y: usize,
+        surface: &mut Surface,
+    ) -> (bool, Option<(FileEntry, String)>) {
         if self.back_btn_idx.is_some() {
             if self.is_button_clicked(x, y, MARGIN, surface.height - 60, 80, BUTTON_HEIGHT) {
                 self.mode = FileManagerMode::Browse;
                 self.setup_ui(surface);
-                return true;
+
+                return (true, None);
             }
         }
 
-        false
+        if self.confirm_open_file_btn_idx.is_some() {
+            if self.is_button_clicked(x, y, MARGIN + 90, surface.height - 60, 80, BUTTON_HEIGHT) {
+                if let Some(app) = self.selected_open_file_app.clone() {
+                    let file = self
+                        .files
+                        .get(self.selected_file_index.unwrap())
+                        .cloned()
+                        .unwrap();
+
+                    self.selected_open_file_app = None;
+                    self.mode = FileManagerMode::Browse;
+                    self.setup_ui(surface);
+
+                    return (true, Some((file, app)));
+                } else {
+                    self.status_message =
+                        "Please select an application to open the file".to_string();
+                    self.setup_ui(surface);
+                }
+                return (true, None);
+            }
+        }
+
+        if let Some(apps) = &self.open_file_options {
+            for (app_y, app) in apps {
+                if self.is_button_clicked(x, y, MARGIN, *app_y, 200, 20) {
+                    self.selected_open_file_app = Some(app.to_string());
+                    self.setup_ui(surface);
+                    return (true, None);
+                }
+            }
+        }
+
+        (false, None)
     }
 
     fn is_button_clicked(
@@ -832,17 +987,6 @@ impl FileManager {
                         self.setup_ui(surface);
                     }
                 }
-            }
-        }
-    }
-
-    fn load_file_content(&mut self, file: &FileEntry) {
-        match read_text_file(file.first_cluster, file.size) {
-            Ok(content) => {
-                self.file_content = content;
-            }
-            Err(e) => {
-                self.file_content = format!("Error reading file: {}", e);
             }
         }
     }
@@ -905,7 +1049,6 @@ impl FileManager {
                 KeyCode::Return => {
                     if let Some(idx) = self.selected_file_index {
                         if let Some(file) = self.files.get(idx).cloned() {
-                            self.load_file_content(&file);
                             self.mode = FileManagerMode::ViewFile(file);
                             self.setup_ui(surface);
                         }

@@ -1,15 +1,17 @@
  - [ ] Fix window drag outline restoring cursor colors
  - [x] Better start menu button styles
  - [ ] List windows on the taskbar
- - [ ] Make windows focusable
  - [x] Sysinfo
  - [ ] Fix notepad bugs
  - [x] More font sizes
  - [x] Fix text rendering non 100% opacity bg colors
+ - [ ] MAKE WINDOWS FOCUSABLE
  - [ ] FS
    - [ ] Explorer
-     - [ ] Display apps to open file
+     - [x] Display apps to open file
      - [ ] Folders
      - [ ] Fix UI rendering to don't redraw everything
    - [ ] Display fs info in sysinfo
-   - [ ] Save notepad to fs
+   - [ ] Notepad
+     - [ ] Save to fs
+     - [ ] change window title based on file state
