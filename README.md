@@ -10,7 +10,8 @@
 
 Goofy OS is a lightweight, feature-rich operating system built from scratch in Rust. It aims to provide a modern computing experience while showcasing advanced OS concepts and design principles.
 
-Preview: ![Goofy OS Preview](./media/preview.mp4)
+**Preview**
+https://github.com/user-attachments/assets/ccc8e8ea-2149-4c18-8c31-aaea638619d7
 
 ## Features
 
